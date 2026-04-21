@@ -465,14 +465,18 @@ export class MindMapView extends ItemView {
       svg.append(path);
     }
 
+    const dropPreviewElements = this.renderDropPreview(layout);
+    if (dropPreviewElements) {
+      svg.append(...dropPreviewElements.svg);
+    }
+
     for (const positioned of layout.nodes.values()) {
       const elements = this.renderNode(positioned);
       nodes.append(...elements);
     }
 
-    const dropIndicator = this.renderDropIndicator(layout);
-    if (dropIndicator) {
-      nodes.append(dropIndicator);
+    if (dropPreviewElements) {
+      nodes.append(...dropPreviewElements.html);
     }
   }
 
@@ -682,31 +686,70 @@ export class MindMapView extends ItemView {
     return button;
   }
 
-  private renderDropIndicator(layout: MindMapLayout): HTMLElement | null {
-    if (!this.dropPreview || this.dropPreview.position === "child") {
+  private renderDropPreview(
+    layout: MindMapLayout,
+  ): { svg: SVGElement[]; html: HTMLElement[] } | null {
+    if (!this.dropPreview || !this.nodeDragState) {
       return null;
     }
 
     const target = layout.nodes.get(this.dropPreview.targetNodeId);
-    if (!target) {
+    const dragged = layout.nodes.get(this.nodeDragState.anchorNodeId);
+    if (!target || !dragged) {
       return null;
     }
 
-    const indicator = document.createElement("div");
-    indicator.className = "oxm-drop-indicator";
-    indicator.style.left = `${target.x - 18}px`;
-    indicator.style.width = `${Math.min(96, target.width + 24)}px`;
-    indicator.style.top = `${
+    const svgElements: SVGElement[] = [];
+    const htmlElements: HTMLElement[] = [];
+
+    if (this.dropPreview.position === "child") {
+      const path = document.createElementNS(SVG_NS, "path");
+      path.setAttribute(
+        "d",
+        buildPreviewCurve(
+          target.x + target.width,
+          target.y + target.height / 2,
+          dragged.x,
+          dragged.y + dragged.height / 2,
+        ),
+      );
+      path.classList.add("oxm-preview-line");
+      svgElements.push(path);
+      return { svg: svgElements, html: htmlElements };
+    }
+
+    const indicatorY =
       this.dropPreview.position === "before"
         ? target.y - 10
-        : target.y + target.height + 8
-    }px`;
+        : target.y + target.height + 8;
+    const indicatorStartX = target.x - 18;
+    const indicatorEndX = indicatorStartX + Math.min(96, target.width + 24);
+
+    const connector = document.createElementNS(SVG_NS, "path");
+    connector.setAttribute(
+      "d",
+      buildPreviewCurve(
+        dragged.x + dragged.width,
+        dragged.y + dragged.height / 2,
+        indicatorStartX,
+        indicatorY,
+      ),
+    );
+    connector.classList.add("oxm-preview-line");
+    svgElements.push(connector);
+
+    const indicator = document.createElement("div");
+    indicator.className = "oxm-drop-indicator";
+    indicator.style.left = `${indicatorStartX}px`;
+    indicator.style.width = `${indicatorEndX - indicatorStartX}px`;
+    indicator.style.top = `${indicatorY}px`;
 
     const dot = document.createElement("div");
     dot.className = "oxm-drop-indicator-dot";
     indicator.append(dot);
+    htmlElements.push(indicator);
 
-    return indicator;
+    return { svg: svgElements, html: htmlElements };
   }
 
   private onNodePointerDown(event: PointerEvent, nodeId: string): void {
@@ -1249,6 +1292,18 @@ function distanceToRect(
   const dx = Math.max(rectX - x, 0, x - (rectX + rectWidth));
   const dy = Math.max(rectY - y, 0, y - (rectY + rectHeight));
   return Math.hypot(dx, dy);
+}
+
+function buildPreviewCurve(
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+): string {
+  const delta = Math.abs(endX - startX);
+  const curve = Math.max(26, delta * 0.34);
+  const direction = endX >= startX ? 1 : -1;
+  return `M ${startX} ${startY} C ${startX + curve * direction} ${startY}, ${endX - curve * direction} ${endY}, ${endX} ${endY}`;
 }
 
 function findParentNode(root: MindMapNode, targetId: string): MindMapNode | null {

@@ -79,6 +79,15 @@
   stroke-linecap: round;
 }
 
+.oxm-preview-line {
+  fill: none;
+  stroke: color-mix(in srgb, var(--text-accent) 56%, white 8%);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-dasharray: 5 6;
+  opacity: 0.95;
+}
+
 .oxm-nodes {
   position: absolute;
   left: 0;
