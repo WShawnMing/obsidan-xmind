@@ -1,10 +1,15 @@
 import { Plugin, TFile, WorkspaceLeaf } from "obsidian";
 import { VIEW_TYPE } from "./constants";
-import type { MindMapViewState } from "./types";
+import type { MindMapViewState, NodeLayoutOffset, PluginData } from "./types";
 import { MindMapView } from "./view/mindmap-view";
 
 export default class ObsidianXMindPlugin extends Plugin {
+  private layoutByFile: Record<string, Record<string, NodeLayoutOffset>> = {};
+
   async onload(): Promise<void> {
+    const data = (await this.loadData()) as PluginData | null;
+    this.layoutByFile = normalizeLayoutStore(data?.layoutByFile);
+
     this.registerView(
       VIEW_TYPE,
       (leaf) => new MindMapView(leaf, this),
@@ -117,6 +122,7 @@ export default class ObsidianXMindPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
         if (file instanceof TFile) {
+          void this.migrateLayoutBucket(oldPath, file.path);
           void this.notifyViewsOfRenamedFile(file, oldPath);
         }
       }),
@@ -147,6 +153,54 @@ export default class ObsidianXMindPlugin extends Plugin {
     }
 
     return activeLeaf.view instanceof MindMapView ? activeLeaf.view : null;
+  }
+
+  getLayoutForFile(filePath: string): Record<string, NodeLayoutOffset> {
+    return { ...(this.layoutByFile[filePath] ?? {}) };
+  }
+
+  async setLayoutForFile(
+    filePath: string,
+    layout: Record<string, NodeLayoutOffset>,
+  ): Promise<void> {
+    if (Object.keys(layout).length === 0) {
+      delete this.layoutByFile[filePath];
+    } else {
+      this.layoutByFile[filePath] = { ...layout };
+    }
+
+    await this.persistPluginData();
+  }
+
+  async pruneLayoutForFile(filePath: string, validNodeIds: Iterable<string>): Promise<void> {
+    const current = this.layoutByFile[filePath];
+    if (!current) {
+      return;
+    }
+
+    const valid = new Set(validNodeIds);
+    const next: Record<string, NodeLayoutOffset> = {};
+    let changed = false;
+
+    for (const [nodeId, offset] of Object.entries(current)) {
+      if (valid.has(nodeId)) {
+        next[nodeId] = offset;
+      } else {
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      return;
+    }
+
+    if (Object.keys(next).length === 0) {
+      delete this.layoutByFile[filePath];
+    } else {
+      this.layoutByFile[filePath] = next;
+    }
+
+    await this.persistPluginData();
   }
 
   private findLeafForFile(filePath: string): WorkspaceLeaf | null {
@@ -184,4 +238,62 @@ export default class ObsidianXMindPlugin extends Plugin {
   private isMarkdownFile(file: TFile | null): file is TFile {
     return file instanceof TFile && file.extension === "md";
   }
+
+  private async migrateLayoutBucket(oldPath: string, newPath: string): Promise<void> {
+    if (oldPath === newPath) {
+      return;
+    }
+
+    const current = this.layoutByFile[oldPath];
+    if (!current) {
+      return;
+    }
+
+    this.layoutByFile[newPath] = current;
+    delete this.layoutByFile[oldPath];
+    await this.persistPluginData();
+  }
+
+  private async persistPluginData(): Promise<void> {
+    await this.saveData({
+      layoutByFile: this.layoutByFile,
+    } satisfies PluginData);
+  }
+}
+
+function normalizeLayoutStore(
+  value: PluginData["layoutByFile"],
+): Record<string, Record<string, NodeLayoutOffset>> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  const next: Record<string, Record<string, NodeLayoutOffset>> = {};
+
+  for (const [filePath, nodeMap] of Object.entries(value)) {
+    if (!nodeMap || typeof nodeMap !== "object") {
+      continue;
+    }
+
+    const normalizedNodeMap: Record<string, NodeLayoutOffset> = {};
+    for (const [nodeId, offset] of Object.entries(nodeMap)) {
+      if (
+        offset &&
+        typeof offset === "object" &&
+        Number.isFinite(offset.x) &&
+        Number.isFinite(offset.y)
+      ) {
+        normalizedNodeMap[nodeId] = {
+          x: offset.x,
+          y: offset.y,
+        };
+      }
+    }
+
+    if (Object.keys(normalizedNodeMap).length > 0) {
+      next[filePath] = normalizedNodeMap;
+    }
+  }
+
+  return next;
 }

@@ -20,8 +20,10 @@ import { parseMarkdownToMindMap } from "../parser/markdown-parser";
 import type {
   MindMapDocument,
   MindMapInlineToken,
+  MindMapLayout,
   MindMapNode,
   MindMapViewState,
+  NodeLayoutOffset,
   PositionedMindMapNode,
 } from "../types";
 import {
@@ -69,6 +71,18 @@ interface DeletedNodeUndoState {
   deletedDescendantCount: number;
 }
 
+interface NodeDragState {
+  pointerId: number;
+  anchorNodeId: string;
+  subtreeNodeIds: string[];
+  startClientX: number;
+  startClientY: number;
+  startAnchorX: number;
+  startAnchorY: number;
+  initialOffsets: Record<string, NodeLayoutOffset>;
+  didDrag: boolean;
+}
+
 export class MindMapView extends ItemView {
   private plugin: ObsidianXMindPlugin;
   private file: TFile | null = null;
@@ -79,6 +93,10 @@ export class MindMapView extends ItemView {
   private editorInput: HTMLInputElement | null = null;
   private pendingSelection: PendingSelectionState | null = null;
   private lastDeletedNodeUndo: DeletedNodeUndoState | null = null;
+  private nodeLayoutOffsets: Record<string, NodeLayoutOffset> = {};
+  private lastRenderedLayout: MindMapLayout | null = null;
+  private nodeDragState: NodeDragState | null = null;
+  private suppressNextNodeClick = false;
   private isCommittingEdit = false;
   private viewport = { ...DEFAULT_VIEWPORT };
   private panState:
@@ -159,6 +177,9 @@ export class MindMapView extends ItemView {
     if (!this.file) {
       this.parsed = null;
       this.selectedNodeId = null;
+      this.nodeLayoutOffsets = {};
+      this.lastRenderedLayout = null;
+      this.nodeDragState = null;
       this.endEditing(false);
       this.render();
       return;
@@ -189,6 +210,19 @@ export class MindMapView extends ItemView {
       if (previousCollapsedIds.has(node.id)) {
         node.collapsed = true;
       }
+    }
+
+    this.nodeLayoutOffsets = this.plugin.getLayoutForFile(this.file.path);
+    const validNodeIds = new Set(parsed.nodesById.keys());
+    let pruned = false;
+    for (const nodeId of Object.keys(this.nodeLayoutOffsets)) {
+      if (!validNodeIds.has(nodeId)) {
+        delete this.nodeLayoutOffsets[nodeId];
+        pruned = true;
+      }
+    }
+    if (pruned) {
+      void this.plugin.setLayoutForFile(this.file.path, this.nodeLayoutOffsets);
     }
 
     this.parsed = parsed;
@@ -401,12 +435,14 @@ export class MindMapView extends ItemView {
     nodes.replaceChildren();
 
     if (!this.file || !this.parsed) {
+      this.lastRenderedLayout = null;
       stage.style.width = "0px";
       stage.style.height = "0px";
       return;
     }
 
-    const layout = layoutMindMap(this.parsed.root);
+    const layout = layoutMindMap(this.parsed.root, this.nodeLayoutOffsets);
+    this.lastRenderedLayout = layout;
     stage.style.width = `${layout.bounds.width}px`;
     stage.style.height = `${layout.bounds.height}px`;
     svg.setAttribute("width", `${layout.bounds.width}`);
@@ -459,6 +495,10 @@ export class MindMapView extends ItemView {
       nodeEl.classList.add("is-editing");
     }
 
+    if (this.nodeDragState?.anchorNodeId === node.id && this.nodeDragState.didDrag) {
+      nodeEl.classList.add("is-dragging");
+    }
+
     const contentEl = document.createElement("div");
     contentEl.className = "oxm-node-content";
 
@@ -496,7 +536,16 @@ export class MindMapView extends ItemView {
     }
 
     nodeEl.append(contentEl);
+    nodeEl.addEventListener("pointerdown", (event) => {
+      this.onNodePointerDown(event, node.id);
+    });
     nodeEl.addEventListener("click", (event) => {
+      if (this.suppressNextNodeClick) {
+        this.suppressNextNodeClick = false;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if ((event.target as HTMLElement).closest(".oxm-token-link")) {
         return;
       }
@@ -610,6 +659,45 @@ export class MindMapView extends ItemView {
     });
 
     return button;
+  }
+
+  private onNodePointerDown(event: PointerEvent, nodeId: string): void {
+    if (
+      event.button !== 0 ||
+      this.editingNodeId ||
+      (event.target as HTMLElement).closest(".oxm-token-link, .oxm-fold-badge")
+    ) {
+      return;
+    }
+
+    if (!this.parsed || !this.lastRenderedLayout) {
+      return;
+    }
+
+    const positioned = this.lastRenderedLayout.nodes.get(nodeId);
+    if (!positioned) {
+      return;
+    }
+
+    const subtreeNodeIds = collectSubtreeNodeIds(positioned.node);
+    const initialOffsets: Record<string, NodeLayoutOffset> = {};
+    for (const subtreeNodeId of subtreeNodeIds) {
+      initialOffsets[subtreeNodeId] = this.nodeLayoutOffsets[subtreeNodeId] ?? { x: 0, y: 0 };
+    }
+
+    this.nodeDragState = {
+      pointerId: event.pointerId,
+      anchorNodeId: nodeId,
+      subtreeNodeIds,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startAnchorX: positioned.x,
+      startAnchorY: positioned.y,
+      initialOffsets,
+      didDrag: false,
+    };
+    this.elements?.surface.setPointerCapture(event.pointerId);
+    event.stopPropagation();
   }
 
   private async commitEditing(): Promise<void> {
@@ -727,6 +815,36 @@ export class MindMapView extends ItemView {
   }
 
   private onPointerMove(event: PointerEvent): void {
+    if (this.nodeDragState && event.pointerId === this.nodeDragState.pointerId) {
+      const scale = this.viewport.scale || 1;
+      const rawDeltaX = (event.clientX - this.nodeDragState.startClientX) / scale;
+      const rawDeltaY = (event.clientY - this.nodeDragState.startClientY) / scale;
+      const deltaX = Math.max(16 - this.nodeDragState.startAnchorX, rawDeltaX);
+      const deltaY = Math.max(8 - this.nodeDragState.startAnchorY, rawDeltaY);
+
+      if (
+        !this.nodeDragState.didDrag &&
+        Math.hypot(deltaX, deltaY) < 4
+      ) {
+        return;
+      }
+
+      this.nodeDragState.didDrag = true;
+      this.selectedNodeId = this.nodeDragState.anchorNodeId;
+
+      for (const nodeId of this.nodeDragState.subtreeNodeIds) {
+        const base = this.nodeDragState.initialOffsets[nodeId] ?? { x: 0, y: 0 };
+        this.nodeLayoutOffsets[nodeId] = {
+          x: base.x + deltaX,
+          y: base.y + deltaY,
+        };
+      }
+
+      this.render();
+      this.renderUndoBar();
+      return;
+    }
+
     if (!this.panState || event.pointerId !== this.panState.pointerId) {
       return;
     }
@@ -737,6 +855,23 @@ export class MindMapView extends ItemView {
   }
 
   private onPointerUp(event: PointerEvent): void {
+    if (this.nodeDragState && event.pointerId === this.nodeDragState.pointerId) {
+      const didDrag = this.nodeDragState.didDrag;
+      this.nodeDragState = null;
+      if (this.elements?.surface.hasPointerCapture(event.pointerId)) {
+        this.elements.surface.releasePointerCapture(event.pointerId);
+      }
+
+      if (didDrag) {
+        this.suppressNextNodeClick = true;
+        if (this.file) {
+          void this.plugin.setLayoutForFile(this.file.path, this.nodeLayoutOffsets);
+        }
+        this.render();
+      }
+      return;
+    }
+
     if (!this.panState || event.pointerId !== this.panState.pointerId) {
       return;
     }
@@ -904,6 +1039,14 @@ function countDescendants(node: MindMapNode): number {
     count += 1 + countDescendants(child);
   }
   return count;
+}
+
+function collectSubtreeNodeIds(node: MindMapNode): string[] {
+  const ids = [node.id];
+  for (const child of node.children) {
+    ids.push(...collectSubtreeNodeIds(child));
+  }
+  return ids;
 }
 
 function findParentNode(root: MindMapNode, targetId: string): MindMapNode | null {

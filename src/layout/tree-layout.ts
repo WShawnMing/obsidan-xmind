@@ -1,5 +1,11 @@
 import { FOLD_BADGE_OFFSET } from "../constants";
-import type { MindMapEdge, MindMapLayout, MindMapNode, PositionedMindMapNode } from "../types";
+import type {
+  MindMapEdge,
+  MindMapLayout,
+  MindMapNode,
+  NodeLayoutOffset,
+  PositionedMindMapNode,
+} from "../types";
 
 const NODE_HEIGHT = 44;
 const MIN_WIDTH = 140;
@@ -9,7 +15,10 @@ const VERTICAL_GAP = 28;
 const PADDING = 48;
 const OUTSIDE_BADGE_SPACE = 64;
 
-export function layoutMindMap(root: MindMapNode): MindMapLayout {
+export function layoutMindMap(
+  root: MindMapNode,
+  layoutOffsets: Record<string, NodeLayoutOffset> = {},
+): MindMapLayout {
   const nodes = new Map<string, PositionedMindMapNode>();
   const edgePairs: Array<{ parentId: string; childId: string }> = [];
   let leafCursor = 0;
@@ -32,10 +41,12 @@ export function layoutMindMap(root: MindMapNode): MindMapLayout {
         ? leafCursor + NODE_HEIGHT / 2
         : (childCenters[0]! + childCenters[childCenters.length - 1]!) / 2;
 
+    const offset = layoutOffsets[node.id] ?? { x: 0, y: 0 };
+
     nodes.set(node.id, {
       node,
-      x: PADDING + depth * HORIZONTAL_GAP,
-      y: centerY - NODE_HEIGHT / 2,
+      x: PADDING + depth * HORIZONTAL_GAP + offset.x,
+      y: centerY - NODE_HEIGHT / 2 + offset.y,
       width,
       height: NODE_HEIGHT,
       depth,

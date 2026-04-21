@@ -83,3 +83,12 @@ export interface MindMapLayout {
     height: number;
   };
 }
+
+export interface NodeLayoutOffset {
+  x: number;
+  y: number;
+}
+
+export interface PluginData {
+  layoutByFile?: Record<string, Record<string, NodeLayoutOffset>>;
+}
