@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-xmind",
+  "name": "Obsidian XMind",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "View the current note as a one-sided mind map built from headings.",
+  "author": "OpenAI Codex",
+  "authorUrl": "https://openai.com",
+  "isDesktopOnly": false
+}

@@ -1,0 +1,76 @@
+import { describe, expect, it } from "vitest";
+import { parseMarkdownToMindMap } from "../src/parser/markdown-parser";
+
+const file = {
+  path: "Notes/Plan.md",
+  basename: "Plan",
+};
+
+describe("parseMarkdownToMindMap", () => {
+  it("uses a single H1 as the root", () => {
+    const doc = parseMarkdownToMindMap(
+      file,
+      "# Project\n## Scope\n### Phase 1\n",
+    );
+
+    expect(doc.root.text).toBe("Project");
+    expect(doc.root.source.kind).toBe("heading");
+    expect(doc.root.children[0]?.text).toBe("Scope");
+    expect(doc.root.children[0]?.children[0]?.text).toBe("Phase 1");
+  });
+
+  it("falls back to a virtual root when there are multiple H1 headings", () => {
+    const doc = parseMarkdownToMindMap(
+      file,
+      "# Alpha\n## A1\n# Beta\n## B1\n",
+    );
+
+    expect(doc.root.text).toBe("Plan");
+    expect(doc.root.source.kind).toBe("virtual-root");
+    expect(doc.root.children.map((node) => node.text)).toEqual(["Alpha", "Beta"]);
+  });
+
+  it("uses a virtual root when there is no H1 heading", () => {
+    const doc = parseMarkdownToMindMap(
+      file,
+      "## Scope\n### Details\n",
+    );
+
+    expect(doc.root.text).toBe("Plan");
+    expect(doc.root.children[0]?.text).toBe("Scope");
+  });
+
+  it("parses overflow list levels after H6", () => {
+    const doc = parseMarkdownToMindMap(
+      file,
+      [
+        "# Root",
+        "###### Level 6",
+        "- Level 7",
+        "  - Level 8",
+        "    - Level 9",
+      ].join("\n"),
+    );
+
+    const level6 = doc.root.children[0];
+    expect(level6?.text).toBe("Level 6");
+    expect(level6?.children[0]?.text).toBe("Level 7");
+    expect(level6?.children[0]?.source.kind).toBe("overflow-list");
+    expect(level6?.children[0]?.children[0]?.text).toBe("Level 8");
+  });
+
+  it("ignores ordinary lists when they are not overflow nodes", () => {
+    const doc = parseMarkdownToMindMap(
+      file,
+      [
+        "# Root",
+        "## Section",
+        "- Regular list item",
+        "  - Still regular",
+      ].join("\n"),
+    );
+
+    expect(doc.root.children[0]?.text).toBe("Section");
+    expect(doc.root.children[0]?.children).toHaveLength(0);
+  });
+});
