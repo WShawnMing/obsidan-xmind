@@ -420,6 +420,10 @@ export class MindMapView extends ItemView {
       button.title = "Collapse branch";
     }
 
+    button.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -496,7 +500,7 @@ export class MindMapView extends ItemView {
   }
 
   private onPointerDown(event: PointerEvent): void {
-    if ((event.target as HTMLElement).closest(".oxm-node")) {
+    if ((event.target as HTMLElement).closest(".oxm-node, .oxm-fold-badge")) {
       return;
     }
 
