@@ -1,4 +1,5 @@
 .oxm-view {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -157,27 +158,54 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 24px;
-  height: 24px;
-  padding: 0 7px;
-  border-radius: 50%;
-  border: 1.5px solid color-mix(in srgb, var(--text-accent) 42%, white 10%);
-  background: color-mix(in srgb, var(--background-primary) 92%, white 8%);
-  color: color-mix(in srgb, var(--text-accent) 78%, black 4%);
-  font-size: 12px;
-  font-weight: 650;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--text-accent) 28%, var(--background-modifier-border));
+  background: color-mix(in srgb, var(--background-primary) 96%, white 4%);
+  color: color-mix(in srgb, var(--text-accent) 72%, black 8%);
+  font-size: 11px;
+  font-weight: 700;
   line-height: 1;
   cursor: pointer;
-  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.07);
-  z-index: 2;
+  letter-spacing: -0.02em;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 6px 14px rgba(15, 23, 42, 0.08);
+  z-index: 3;
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.oxm-fold-badge::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  width: 10px;
+  height: 1.5px;
+  transform: translateY(-50%);
+  background: color-mix(in srgb, var(--text-accent) 16%, var(--background-modifier-border));
+  border-radius: 999px;
 }
 
 .oxm-fold-badge:hover {
-  background: color-mix(in srgb, var(--background-primary) 86%, white 14%);
+  transform: translateY(-0.5px);
+  background: color-mix(in srgb, var(--background-primary) 92%, white 8%);
+  border-color: color-mix(in srgb, var(--text-accent) 42%, var(--background-modifier-border));
+  box-shadow:
+    0 2px 4px rgba(15, 23, 42, 0.06),
+    0 8px 18px rgba(15, 23, 42, 0.11);
 }
 
 .oxm-fold-badge.is-collapsed {
-  border-color: color-mix(in srgb, var(--text-accent) 54%, white 8%);
+  min-width: 24px;
+  border-color: color-mix(in srgb, var(--text-accent) 38%, var(--background-modifier-border));
+  color: color-mix(in srgb, var(--text-accent) 82%, black 2%);
 }
 
 .oxm-node-content {
@@ -242,6 +270,119 @@
   border-radius: 0;
 }
 
+.oxm-undo-bar {
+  position: absolute;
+  left: 18px;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(520px, calc(100% - 36px));
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 88%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--background-primary) 94%, white 6%);
+  box-shadow:
+    0 10px 30px rgba(15, 23, 42, 0.1),
+    0 2px 6px rgba(15, 23, 42, 0.05);
+  backdrop-filter: blur(16px);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(10px);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+  z-index: 8;
+}
+
+.oxm-undo-bar.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.oxm-undo-message {
+  min-width: 0;
+  color: var(--text-normal);
+  font-size: 13px;
+  font-weight: 560;
+  line-height: 1.35;
+}
+
+.oxm-undo-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.oxm-undo-button,
+.oxm-undo-dismiss {
+  border: 0;
+  background: none;
+  padding: 0;
+  margin: 0;
+  color: var(--text-accent);
+  cursor: pointer;
+  font: inherit;
+}
+
+.oxm-undo-button {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-accent) 10%, transparent);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.oxm-undo-button:hover {
+  background: color-mix(in srgb, var(--text-accent) 16%, transparent);
+}
+
+.oxm-undo-dismiss {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 24px;
+  text-align: center;
+}
+
+.oxm-undo-dismiss:hover {
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  color: var(--text-normal);
+}
+
+.oxm-delete-modal .modal-content {
+  padding: 24px;
+}
+
+.oxm-delete-modal-title {
+  margin: 0 0 10px;
+  font-size: 20px;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+}
+
+.oxm-delete-modal-copy {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.oxm-delete-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.oxm-delete-modal-button {
+  min-width: 108px;
+}
+
 @media (max-width: 720px) {
   .oxm-toolbar {
     padding: 14px 14px 12px;
@@ -249,5 +390,12 @@
 
   .oxm-node {
     border-radius: 16px;
+  }
+
+  .oxm-undo-bar {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    max-width: none;
   }
 }

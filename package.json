@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-    "test": "vitest run"
+    "test": "vitest run tests"
   },
   "license": "MIT",
   "devDependencies": {

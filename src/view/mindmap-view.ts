@@ -1,5 +1,6 @@
 import {
   ItemView,
+  Modal,
   Notice,
   TFile,
   WorkspaceLeaf,
@@ -33,6 +34,10 @@ interface ViewElements {
   stage: HTMLElement;
   svg: SVGSVGElement;
   nodes: HTMLElement;
+  undoBar: HTMLElement;
+  undoMessage: HTMLElement;
+  undoAction: HTMLButtonElement;
+  undoDismiss: HTMLButtonElement;
 }
 
 interface PendingSelectionState {
@@ -48,6 +53,14 @@ interface PendingSelectionState {
       };
 }
 
+interface DeletedNodeUndoState {
+  beforeContent: string;
+  afterContent: string;
+  deletedNodeId: string;
+  deletedLabel: string;
+  deletedDescendantCount: number;
+}
+
 export class MindMapView extends ItemView {
   private plugin: ObsidianXMindPlugin;
   private file: TFile | null = null;
@@ -57,6 +70,7 @@ export class MindMapView extends ItemView {
   private editingNodeId: string | null = null;
   private editorInput: HTMLInputElement | null = null;
   private pendingSelection: PendingSelectionState | null = null;
+  private lastDeletedNodeUndo: DeletedNodeUndoState | null = null;
   private isCommittingEdit = false;
   private viewport = { ...DEFAULT_VIEWPORT };
   private panState:
@@ -152,6 +166,9 @@ export class MindMapView extends ItemView {
     }
 
     const content = await this.app.vault.read(this.file);
+    if (this.lastDeletedNodeUndo && this.lastDeletedNodeUndo.afterContent !== content) {
+      this.lastDeletedNodeUndo = null;
+    }
     const parsed = parseMarkdownToMindMap(
       {
         path: this.file.path,
@@ -175,6 +192,7 @@ export class MindMapView extends ItemView {
       this.selectedNodeId = parsed.root.id;
     }
     this.render();
+    this.renderUndoBar();
   }
 
   async editSelectedNode(): Promise<void> {
@@ -226,10 +244,25 @@ export class MindMapView extends ItemView {
     }
 
     const parent = findParentNode(this.parsed.root, node.id);
+    const descendantCount = countDescendants(node);
+
+    if (node.children.length > 0) {
+      const confirmed = await confirmDeleteWithChildren(this, node, descendantCount);
+      if (!confirmed) {
+        return;
+      }
+    }
 
     try {
       const content = await this.app.vault.read(this.file);
       const nextContent = deleteNode(content, this.parsed, node);
+      this.lastDeletedNodeUndo = {
+        beforeContent: content,
+        afterContent: nextContent,
+        deletedNodeId: node.id,
+        deletedLabel: node.label || node.text,
+        deletedDescendantCount: descendantCount,
+      };
       this.pendingSelection = parent
         ? {
             source: {
@@ -286,6 +319,39 @@ export class MindMapView extends ItemView {
     stage.append(nodes);
     surface.append(stage);
 
+    const undoBar = document.createElement("div");
+    undoBar.className = "oxm-undo-bar";
+    undoBar.addEventListener("pointerdown", (event) => {
+      event.stopPropagation();
+    });
+
+    const undoMessage = document.createElement("div");
+    undoMessage.className = "oxm-undo-message";
+
+    const undoActions = document.createElement("div");
+    undoActions.className = "oxm-undo-actions";
+
+    const undoAction = document.createElement("button");
+    undoAction.className = "oxm-undo-button";
+    undoAction.type = "button";
+    undoAction.textContent = "Undo";
+    undoAction.addEventListener("click", () => {
+      void this.undoLastDeletion();
+    });
+
+    const undoDismiss = document.createElement("button");
+    undoDismiss.className = "oxm-undo-dismiss";
+    undoDismiss.type = "button";
+    undoDismiss.setAttribute("aria-label", "Dismiss undo banner");
+    undoDismiss.textContent = "×";
+    undoDismiss.addEventListener("click", () => {
+      this.lastDeletedNodeUndo = null;
+      this.renderUndoBar();
+    });
+
+    undoActions.append(undoAction, undoDismiss);
+    undoBar.append(undoMessage, undoActions);
+
     surface.addEventListener("pointerdown", (event) => this.onPointerDown(event));
     surface.addEventListener("pointermove", (event) => this.onPointerMove(event));
     surface.addEventListener("pointerup", (event) => this.onPointerUp(event));
@@ -297,15 +363,20 @@ export class MindMapView extends ItemView {
     );
     this.contentEl.addEventListener("keydown", (event) => this.onKeyDown(event));
 
-    this.contentEl.append(toolbar, surface);
+    this.contentEl.append(toolbar, surface, undoBar);
     this.elements = {
       toolbarTitle,
       surface,
       stage,
       svg,
       nodes,
+      undoBar,
+      undoMessage,
+      undoAction,
+      undoDismiss,
     };
     this.applyViewport();
+    this.renderUndoBar();
   }
 
   private render(): void {
@@ -506,13 +577,14 @@ export class MindMapView extends ItemView {
     const button = document.createElement("button");
     button.className = "oxm-fold-badge";
     button.type = "button";
-    button.style.left = `${positioned.x + positioned.width + 10}px`;
-    button.style.top = `${positioned.y + positioned.height / 2 - 12}px`;
+    button.style.left = `${positioned.x + positioned.width + 18}px`;
+    button.style.top = `${positioned.y + positioned.height / 2 - 10}px`;
 
     if (node.collapsed) {
       button.classList.add("is-collapsed");
-      button.textContent = `${countDescendants(node)}`;
-      button.title = `Expand ${countDescendants(node)} hidden nodes`;
+      const hiddenCount = countDescendants(node);
+      button.textContent = `${hiddenCount}`;
+      button.title = `Expand ${hiddenCount} hidden nodes`;
     } else {
       button.textContent = "−";
       button.title = "Collapse branch";
@@ -556,6 +628,7 @@ export class MindMapView extends ItemView {
       const nextContent = patchNodeTitle(content, node, nextTitle);
       this.endEditing(false);
       if (nextContent !== content) {
+        this.lastDeletedNodeUndo = null;
         await this.app.vault.modify(this.file, nextContent);
       }
       await this.refresh();
@@ -588,6 +661,12 @@ export class MindMapView extends ItemView {
 
   private onKeyDown(event: KeyboardEvent): void {
     if (this.editingNodeId) {
+      return;
+    }
+
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+      event.preventDefault();
+      void this.undoLastDeletion();
       return;
     }
 
@@ -691,6 +770,27 @@ export class MindMapView extends ItemView {
     this.elements.stage.style.transform = `translate(${this.viewport.x}px, ${this.viewport.y}px) scale(${this.viewport.scale})`;
   }
 
+  private renderUndoBar(): void {
+    if (!this.elements) {
+      return;
+    }
+
+    const { undoBar, undoMessage } = this.elements;
+    const undo = this.lastDeletedNodeUndo;
+    if (!undo) {
+      undoBar.classList.remove("is-visible");
+      undoMessage.textContent = "";
+      return;
+    }
+
+    const suffix =
+      undo.deletedDescendantCount > 0
+        ? ` and ${undo.deletedDescendantCount} nested topic${undo.deletedDescendantCount === 1 ? "" : "s"}`
+        : "";
+    undoMessage.textContent = `Deleted “${undo.deletedLabel}”${suffix}.`;
+    undoBar.classList.add("is-visible");
+  }
+
   private applyPendingSelection(parsed: MindMapDocument): void {
     const pending = this.pendingSelection;
     this.pendingSelection = null;
@@ -738,6 +838,7 @@ export class MindMapView extends ItemView {
           }
         : null;
       if (patch.content !== content) {
+        this.lastDeletedNodeUndo = null;
         await this.app.vault.modify(this.file, patch.content);
       }
       await this.refresh();
@@ -751,6 +852,36 @@ export class MindMapView extends ItemView {
       }
 
       new Notice("Failed to update the note structure.");
+    }
+  }
+
+  private async undoLastDeletion(): Promise<void> {
+    if (!this.file || !this.lastDeletedNodeUndo) {
+      return;
+    }
+
+    const undo = this.lastDeletedNodeUndo;
+
+    try {
+      const currentContent = await this.app.vault.read(this.file);
+      if (currentContent !== undo.afterContent) {
+        this.lastDeletedNodeUndo = null;
+        this.renderUndoBar();
+        new Notice("Undo is no longer available because the note changed.");
+        return;
+      }
+
+      this.pendingSelection = {
+        source: {
+          type: "node-id",
+          nodeId: undo.deletedNodeId,
+        },
+      };
+      this.lastDeletedNodeUndo = null;
+      await this.app.vault.modify(this.file, undo.beforeContent);
+      await this.refresh();
+    } catch {
+      new Notice("Failed to restore the deleted topic.");
     }
   }
 }
@@ -798,4 +929,92 @@ function findInsertedNode(
   }
 
   return null;
+}
+
+async function confirmDeleteWithChildren(
+  view: MindMapView,
+  node: MindMapNode,
+  descendantCount: number,
+): Promise<boolean> {
+  const modal = new DeleteTopicConfirmModal(
+    view.app,
+    node.label || node.text,
+    descendantCount,
+  );
+  return modal.openAndWait();
+}
+
+class DeleteTopicConfirmModal extends Modal {
+  private topicLabel: string;
+  private descendantCount: number;
+  private resolvePromise: ((value: boolean) => void) | null = null;
+
+  constructor(app: MindMapView["app"], topicLabel: string, descendantCount: number) {
+    super(app);
+    this.topicLabel = topicLabel;
+    this.descendantCount = descendantCount;
+  }
+
+  openAndWait(): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      this.resolvePromise = resolve;
+      this.open();
+    });
+  }
+
+  onOpen(): void {
+    const { contentEl, modalEl } = this;
+    modalEl.addClass("oxm-delete-modal");
+    contentEl.empty();
+
+    const title = contentEl.createEl("h3", {
+      text: "Delete topic?",
+      cls: "oxm-delete-modal-title",
+    });
+    title.tabIndex = -1;
+
+    const body = contentEl.createEl("p", {
+      cls: "oxm-delete-modal-copy",
+      text:
+        this.descendantCount === 1
+          ? `Deleting “${this.topicLabel}” will also remove 1 nested topic from the Markdown note.`
+          : `Deleting “${this.topicLabel}” will also remove ${this.descendantCount} nested topics from the Markdown note.`,
+    });
+
+    const footer = contentEl.createDiv("oxm-delete-modal-actions");
+
+    const cancelButton = footer.createEl("button", {
+      text: "Cancel",
+      cls: "mod-muted oxm-delete-modal-button",
+    });
+    cancelButton.type = "button";
+    cancelButton.addEventListener("click", () => this.finish(false));
+
+    const confirmButton = footer.createEl("button", {
+      text: "Delete topic",
+      cls: "mod-warning oxm-delete-modal-button is-danger",
+    });
+    confirmButton.type = "button";
+    confirmButton.addEventListener("click", () => this.finish(true));
+
+    window.requestAnimationFrame(() => {
+      confirmButton.focus();
+    });
+  }
+
+  onClose(): void {
+    const resolve = this.resolvePromise;
+    this.resolvePromise = null;
+    this.contentEl.empty();
+    if (resolve) {
+      resolve(false);
+    }
+  }
+
+  private finish(confirmed: boolean): void {
+    const resolve = this.resolvePromise;
+    this.resolvePromise = null;
+    this.close();
+    resolve?.(confirmed);
+  }
 }
