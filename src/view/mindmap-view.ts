@@ -22,9 +22,7 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 
 interface ViewElements {
   toolbarTitle: HTMLElement;
-  refreshButton: HTMLButtonElement;
   surface: HTMLElement;
-  empty: HTMLElement;
   stage: HTMLElement;
   svg: SVGSVGElement;
   nodes: HTMLElement;
@@ -175,25 +173,10 @@ export class MindMapView extends ItemView {
     const toolbarTitle = document.createElement("div");
     toolbarTitle.className = "oxm-toolbar-title";
     toolbarMeta.append(toolbarTitle);
-
-    const toolbarActions = document.createElement("div");
-    toolbarActions.className = "oxm-toolbar-actions";
-    const refreshButton = document.createElement("button");
-    refreshButton.className = "oxm-button";
-    refreshButton.type = "button";
-    refreshButton.textContent = "Refresh";
-    refreshButton.addEventListener("click", () => {
-      void this.refresh();
-    });
-    toolbarActions.append(refreshButton);
-    toolbar.append(toolbarMeta, toolbarActions);
+    toolbar.append(toolbarMeta);
 
     const surface = document.createElement("div");
     surface.className = "oxm-surface";
-
-    const empty = document.createElement("div");
-    empty.className = "oxm-empty";
-    surface.append(empty);
 
     const stage = document.createElement("div");
     stage.className = "oxm-stage";
@@ -222,9 +205,7 @@ export class MindMapView extends ItemView {
     this.contentEl.append(toolbar, surface);
     this.elements = {
       toolbarTitle,
-      refreshButton,
       surface,
-      empty,
       stage,
       svg,
       nodes,
@@ -237,10 +218,9 @@ export class MindMapView extends ItemView {
       return;
     }
 
-    const { toolbarTitle, refreshButton, empty, stage, svg, nodes } =
+    const { toolbarTitle, stage, svg, nodes } =
       this.elements;
 
-    refreshButton.disabled = !this.file;
     toolbarTitle.textContent = this.file ? this.file.basename : "No Markdown note selected";
 
     svg.replaceChildren();
@@ -249,12 +229,9 @@ export class MindMapView extends ItemView {
     if (!this.file || !this.parsed) {
       stage.style.width = "0px";
       stage.style.height = "0px";
-      empty.hidden = false;
-      empty.textContent = "Open a Markdown note and run “Open mind map for current note”.";
       return;
     }
 
-    empty.hidden = true;
     const layout = layoutMindMap(this.parsed.root);
     stage.style.width = `${layout.bounds.width}px`;
     stage.style.height = `${layout.bounds.height}px`;
@@ -270,11 +247,12 @@ export class MindMapView extends ItemView {
     }
 
     for (const positioned of layout.nodes.values()) {
-      nodes.append(this.renderNode(positioned));
+      const elements = this.renderNode(positioned);
+      nodes.append(...elements);
     }
   }
 
-  private renderNode(positioned: PositionedMindMapNode): HTMLElement {
+  private renderNode(positioned: PositionedMindMapNode): HTMLElement[] {
     const node = positioned.node;
     const editable =
       node.source.kind === "heading" || node.source.kind === "overflow-list";
@@ -285,7 +263,9 @@ export class MindMapView extends ItemView {
     nodeEl.style.width = `${positioned.width}px`;
     nodeEl.style.height = `${positioned.height}px`;
 
-    if (node.id === this.selectedNodeId) {
+    const isEditing = this.editingNodeId === node.id;
+
+    if (node.id === this.selectedNodeId && !isEditing) {
       nodeEl.classList.add("is-selected");
     }
 
@@ -301,28 +281,14 @@ export class MindMapView extends ItemView {
       nodeEl.classList.add("is-readonly");
     }
 
-    if (this.editingNodeId === node.id) {
+    if (isEditing) {
       nodeEl.classList.add("is-editing");
-    }
-
-    if (node.children.length > 0) {
-      const toggle = document.createElement("button");
-      toggle.className = "oxm-node-toggle";
-      toggle.type = "button";
-      toggle.textContent = node.collapsed ? "+" : "−";
-      toggle.title = node.collapsed ? "Expand" : "Collapse";
-      toggle.addEventListener("click", (event) => {
-        event.stopPropagation();
-        node.collapsed = !node.collapsed;
-        this.render();
-      });
-      nodeEl.append(toggle);
     }
 
     const contentEl = document.createElement("div");
     contentEl.className = "oxm-node-content";
 
-    if (this.editingNodeId === node.id && editable) {
+    if (isEditing && editable) {
       const input = document.createElement("input");
       input.className = "oxm-node-input";
       input.type = "text";
@@ -377,7 +343,13 @@ export class MindMapView extends ItemView {
       this.startEditing(node.id);
     });
 
-    return nodeEl;
+    const elements: HTMLElement[] = [nodeEl];
+    if (node.children.length > 0) {
+      const toggle = this.renderFoldBadge(positioned);
+      elements.push(toggle);
+    }
+
+    return elements;
   }
 
   private renderToken(token: MindMapInlineToken): HTMLElement {
@@ -429,6 +401,33 @@ export class MindMapView extends ItemView {
     this.selectedNodeId = nodeId;
     this.editingNodeId = nodeId;
     this.render();
+  }
+
+  private renderFoldBadge(positioned: PositionedMindMapNode): HTMLButtonElement {
+    const node = positioned.node;
+    const button = document.createElement("button");
+    button.className = "oxm-fold-badge";
+    button.type = "button";
+    button.style.left = `${positioned.x + positioned.width + 10}px`;
+    button.style.top = `${positioned.y + positioned.height / 2 - 12}px`;
+
+    if (node.collapsed) {
+      button.classList.add("is-collapsed");
+      button.textContent = `${countDescendants(node)}`;
+      button.title = `Expand ${countDescendants(node)} hidden nodes`;
+    } else {
+      button.textContent = "−";
+      button.title = "Collapse branch";
+    }
+
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      node.collapsed = !node.collapsed;
+      this.render();
+    });
+
+    return button;
   }
 
   private async commitEditing(): Promise<void> {
@@ -567,4 +566,12 @@ export class MindMapView extends ItemView {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function countDescendants(node: MindMapNode): number {
+  let count = 0;
+  for (const child of node.children) {
+    count += 1 + countDescendants(child);
+  }
+  return count;
 }

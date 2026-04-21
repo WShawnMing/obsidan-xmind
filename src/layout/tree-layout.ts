@@ -6,6 +6,7 @@ const MAX_WIDTH = 320;
 const HORIZONTAL_GAP = 220;
 const VERTICAL_GAP = 28;
 const PADDING = 48;
+const OUTSIDE_BADGE_SPACE = 48;
 
 export function layoutMindMap(root: MindMapNode): MindMapLayout {
   const nodes = new Map<string, PositionedMindMapNode>();
@@ -84,7 +85,7 @@ export function layoutMindMap(root: MindMapNode): MindMapLayout {
     nodes,
     edges,
     bounds: {
-      width: maxWidth + PADDING,
+      width: maxWidth + PADDING + OUTSIDE_BADGE_SPACE,
       height: maxHeight + PADDING,
     },
   };

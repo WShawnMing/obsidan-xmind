@@ -9,8 +9,7 @@
 .oxm-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  justify-content: flex-start;
   padding: 18px 22px 14px;
   border-bottom: 1px solid var(--background-modifier-border);
   background: color-mix(in srgb, var(--background-primary) 96%, transparent);
@@ -41,34 +40,6 @@
   text-overflow: ellipsis;
 }
 
-.oxm-toolbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.oxm-button {
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--background-secondary) 76%, white 24%);
-  color: var(--text-normal);
-  font-size: 12px;
-  line-height: 1;
-  font-weight: 600;
-  padding: 8px 13px;
-  cursor: pointer;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-}
-
-.oxm-button:hover {
-  background: color-mix(in srgb, var(--background-secondary) 68%, white 32%);
-}
-
-.oxm-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 .oxm-surface {
   position: relative;
   flex: 1;
@@ -82,22 +53,6 @@
 
 .oxm-surface.is-panning {
   cursor: grabbing;
-}
-
-.oxm-empty {
-  position: absolute;
-  left: 24px;
-  top: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 10px 14px;
-  text-align: center;
-  color: var(--text-muted);
-  font-size: 12px;
-  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 78%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--background-secondary) 80%, transparent);
 }
 
 .oxm-stage {
@@ -193,26 +148,36 @@
 .oxm-node.is-editing {
   border-color: color-mix(in srgb, var(--text-accent) 58%, white 8%);
   box-shadow:
-    0 0 0 4px color-mix(in srgb, var(--text-accent) 14%, transparent),
-    0 18px 36px rgba(15, 23, 42, 0.08);
+    0 0 0 3px color-mix(in srgb, var(--text-accent) 14%, transparent),
+    0 14px 30px rgba(15, 23, 42, 0.08);
 }
 
-.oxm-node-toggle {
-  align-self: center;
-  width: 22px;
-  height: 22px;
-  border: 0;
+.oxm-fold-badge {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--background-secondary) 78%, transparent);
-  color: var(--text-muted);
+  border: 1.5px solid color-mix(in srgb, var(--text-accent) 42%, white 10%);
+  background: color-mix(in srgb, var(--background-primary) 92%, white 8%);
+  color: color-mix(in srgb, var(--text-accent) 78%, black 4%);
   font-size: 12px;
+  font-weight: 650;
   line-height: 1;
   cursor: pointer;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.07);
+  z-index: 2;
 }
 
-.oxm-node-toggle:hover {
-  background: color-mix(in srgb, var(--background-secondary) 94%, transparent);
-  color: var(--text-normal);
+.oxm-fold-badge:hover {
+  background: color-mix(in srgb, var(--background-primary) 86%, white 14%);
+}
+
+.oxm-fold-badge.is-collapsed {
+  border-color: color-mix(in srgb, var(--text-accent) 54%, white 8%);
 }
 
 .oxm-node-content {
@@ -265,11 +230,16 @@
   min-width: 0;
   border: 0;
   padding: 0;
+  margin: 0;
   background: transparent;
   color: var(--text-normal);
   font: inherit;
   outline: none;
   caret-color: var(--text-accent);
+  appearance: none;
+  -webkit-appearance: none;
+  box-shadow: none;
+  border-radius: 0;
 }
 
 @media (max-width: 720px) {
