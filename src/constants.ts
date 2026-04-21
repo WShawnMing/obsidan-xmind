@@ -9,3 +9,6 @@ export const DEFAULT_VIEWPORT = {
 
 export const MIN_SCALE = 0.5;
 export const MAX_SCALE = 2;
+
+export const FOLD_BADGE_SIZE = 20;
+export const FOLD_BADGE_OFFSET = 28;

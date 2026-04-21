@@ -1,3 +1,4 @@
+import { FOLD_BADGE_OFFSET } from "../constants";
 import type { MindMapEdge, MindMapLayout, MindMapNode, PositionedMindMapNode } from "../types";
 
 const NODE_HEIGHT = 44;
@@ -65,12 +66,13 @@ export function layoutMindMap(root: MindMapNode): MindMapLayout {
     const startY = parent.y + parent.height / 2;
     const endX = child.x;
     const endY = child.y + child.height / 2;
-    const curve = Math.max(36, (endX - startX) * 0.4);
+    const branchAnchorX = startX + FOLD_BADGE_OFFSET;
+    const curve = Math.max(26, (endX - branchAnchorX) * 0.34);
 
     return {
       parentId,
       childId,
-      path: `M ${startX} ${startY} C ${startX + curve} ${startY}, ${endX - curve} ${endY}, ${endX} ${endY}`,
+      path: `M ${startX} ${startY} L ${branchAnchorX} ${startY} C ${branchAnchorX + curve} ${startY}, ${endX - curve} ${endY}, ${endX} ${endY}`,
     };
   });
 

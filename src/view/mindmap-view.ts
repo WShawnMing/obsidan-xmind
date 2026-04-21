@@ -6,7 +6,15 @@ import {
   WorkspaceLeaf,
   getLinkpath,
 } from "obsidian";
-import { DEFAULT_VIEWPORT, MAX_SCALE, MIN_SCALE, VIEW_NAME, VIEW_TYPE } from "../constants";
+import {
+  DEFAULT_VIEWPORT,
+  FOLD_BADGE_OFFSET,
+  FOLD_BADGE_SIZE,
+  MAX_SCALE,
+  MIN_SCALE,
+  VIEW_NAME,
+  VIEW_TYPE,
+} from "../constants";
 import { layoutMindMap } from "../layout/tree-layout";
 import { parseMarkdownToMindMap } from "../parser/markdown-parser";
 import type {
@@ -577,8 +585,8 @@ export class MindMapView extends ItemView {
     const button = document.createElement("button");
     button.className = "oxm-fold-badge";
     button.type = "button";
-    button.style.left = `${positioned.x + positioned.width + 18}px`;
-    button.style.top = `${positioned.y + positioned.height / 2 - 10}px`;
+    button.style.left = `${positioned.x + positioned.width + FOLD_BADGE_OFFSET - FOLD_BADGE_SIZE / 2}px`;
+    button.style.top = `${positioned.y + positioned.height / 2 - FOLD_BADGE_SIZE / 2}px`;
 
     if (node.collapsed) {
       button.classList.add("is-collapsed");
