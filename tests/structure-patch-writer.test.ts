@@ -5,6 +5,7 @@ import {
   deleteNode,
   insertChildNode,
   insertSiblingNode,
+  moveNode,
 } from "../src/write/structure-patch-writer";
 
 const file = {
@@ -124,5 +125,109 @@ describe("structure-patch-writer", () => {
     const doc = parseMarkdownToMindMap(file, source);
 
     expect(() => deleteNode(source, doc, doc.root)).toThrowError(StructurePatchError);
+  });
+
+  it("moves a heading after another sibling", () => {
+    const source = [
+      "# Root",
+      "## Alpha",
+      "## Beta",
+      "## Gamma",
+    ].join("\n");
+    const doc = parseMarkdownToMindMap(file, source);
+
+    const patch = moveNode(
+      source,
+      doc,
+      doc.root.children[0]!,
+      doc.root.children[2]!,
+      "after",
+    );
+
+    expect(patch.content).toBe([
+      "# Root",
+      "## Beta",
+      "## Gamma",
+      "## Alpha",
+    ].join("\n"));
+    expect(patch.insertedNode?.line).toBe(4);
+  });
+
+  it("moves a heading to become a child of another heading", () => {
+    const source = [
+      "# Root",
+      "## Alpha",
+      "## Beta",
+      "### Beta Child",
+    ].join("\n");
+    const doc = parseMarkdownToMindMap(file, source);
+
+    const patch = moveNode(
+      source,
+      doc,
+      doc.root.children[0]!,
+      doc.root.children[1]!,
+      "child",
+    );
+
+    expect(patch.content).toBe([
+      "# Root",
+      "## Beta",
+      "### Beta Child",
+      "### Alpha",
+    ].join("\n"));
+  });
+
+  it("converts moved headings into overflow list items under H6", () => {
+    const source = [
+      "# Root",
+      "###### Level 6",
+      "## Alpha",
+      "### Child",
+    ].join("\n");
+    const doc = parseMarkdownToMindMap(file, source);
+
+    const patch = moveNode(
+      source,
+      doc,
+      doc.root.children[1]!,
+      doc.root.children[0]!,
+      "child",
+    );
+
+    expect(patch.content).toBe([
+      "# Root",
+      "###### Level 6",
+      "- Alpha",
+      "  - Child",
+    ].join("\n"));
+  });
+
+  it("moves an overflow subtree before a sibling overflow subtree", () => {
+    const source = [
+      "# Root",
+      "###### Level 6",
+      "- Alpha",
+      "  - Child",
+      "- Beta",
+    ].join("\n");
+    const doc = parseMarkdownToMindMap(file, source);
+    const level6 = doc.root.children[0]!;
+
+    const patch = moveNode(
+      source,
+      doc,
+      level6.children[1]!,
+      level6.children[0]!,
+      "before",
+    );
+
+    expect(patch.content).toBe([
+      "# Root",
+      "###### Level 6",
+      "- Beta",
+      "- Alpha",
+      "  - Child",
+    ].join("\n"));
   });
 });

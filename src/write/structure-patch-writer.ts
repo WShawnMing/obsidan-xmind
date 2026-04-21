@@ -21,6 +21,8 @@ export interface StructurePatchResult {
   insertedNode?: InsertedNodeSelection;
 }
 
+export type MoveNodePosition = "before" | "after" | "child";
+
 interface LineState {
   lines: string[];
   documentEndIndex: number;
@@ -236,12 +238,107 @@ export function deleteNode(
   return state.lines.join("\n");
 }
 
+export function moveNode(
+  content: string,
+  document: MindMapDocument,
+  node: MindMapNode,
+  targetNode: MindMapNode,
+  position: MoveNodePosition,
+): StructurePatchResult {
+  validateMovableNode(node, document);
+
+  if (targetNode.source.kind === "linked-note") {
+    throw new StructurePatchError(
+      "NOT_EDITABLE",
+      "Linked-note items cannot be used as drag targets yet.",
+    );
+  }
+
+  if (position !== "child" && targetNode.source.kind === "virtual-root") {
+    throw new StructurePatchError(
+      "INVALID_TARGET",
+      "The canvas root only accepts child drops.",
+    );
+  }
+
+  if (node.id === targetNode.id) {
+    throw new StructurePatchError(
+      "INVALID_TARGET",
+      "A topic cannot be dropped onto itself.",
+    );
+  }
+
+  if (hasDescendant(node, targetNode.id)) {
+    throw new StructurePatchError(
+      "INVALID_TARGET",
+      "A topic cannot be dropped onto one of its descendants.",
+    );
+  }
+
+  const state = buildLineState(content);
+  const sourceStartIndex = getNodeLineIndex(node);
+  const sourceEndIndex = getSubtreeEndIndex(state.lines, node);
+  const sourceBlock = state.lines.slice(sourceStartIndex, sourceEndIndex);
+
+  if (sourceBlock.length === 0) {
+    throw new StructurePatchError("STALE_SOURCE", "The source topic could not be moved.");
+  }
+
+  const targetRoot = getMoveTargetSpec(state.lines, targetNode, position);
+  const transformedBlock = rewriteMovedBlock(sourceBlock, node, targetRoot);
+
+  state.lines.splice(sourceStartIndex, sourceEndIndex - sourceStartIndex);
+
+  const removedLineCount = sourceEndIndex - sourceStartIndex;
+  const insertionIndex = getAdjustedInsertionIndex(
+    state.lines,
+    removedLineCount,
+    sourceStartIndex,
+    targetRoot.insertionIndex,
+  );
+
+  state.lines.splice(insertionIndex, 0, ...transformedBlock);
+
+  return {
+    content: state.lines.join("\n"),
+    insertedNode: {
+      kind: targetRoot.kind,
+      depth: targetRoot.depth,
+      line: insertionIndex + 1,
+      text: node.text,
+    },
+  };
+}
+
 function buildLineState(content: string): LineState {
   const lines = content.split("\n");
   return {
     lines,
     documentEndIndex: getDocumentEndIndex(lines),
   };
+}
+
+function validateMovableNode(node: MindMapNode, document: MindMapDocument): void {
+  if (node.source.kind === "virtual-root") {
+    throw new StructurePatchError(
+      "INVALID_TARGET",
+      "The canvas root cannot be moved.",
+    );
+  }
+
+  if (node.source.kind === "linked-note") {
+    throw new StructurePatchError(
+      "NOT_EDITABLE",
+      "Linked-note items cannot be moved yet.",
+    );
+  }
+
+  if (document.root.id === node.id) {
+    throw new StructurePatchError(
+      "INVALID_TARGET",
+      "The root topic cannot be moved.",
+    );
+  }
 }
 
 function getDocumentEndIndex(lines: string[]): number {
@@ -331,6 +428,197 @@ function findOverflowSubtreeEnd(lines: string[], node: MindMapNode): number {
   }
 
   return endIndex;
+}
+
+interface MoveTargetSpec {
+  kind: "heading" | "overflow-list";
+  depth: number;
+  indent: number;
+  insertionIndex: number;
+}
+
+function getMoveTargetSpec(
+  lines: string[],
+  targetNode: MindMapNode,
+  position: MoveNodePosition,
+): MoveTargetSpec {
+  if (position === "child") {
+    if (targetNode.source.kind === "virtual-root") {
+      return {
+        kind: "heading",
+        depth: 1,
+        indent: 0,
+        insertionIndex: getDocumentEndIndex(lines),
+      };
+    }
+
+    if (targetNode.source.kind === "heading") {
+      validateHeadingLine(lines, targetNode);
+      return targetNode.source.depth < 6
+        ? {
+            kind: "heading",
+            depth: targetNode.source.depth + 1,
+            indent: 0,
+            insertionIndex: getSubtreeEndIndex(lines, targetNode),
+          }
+        : {
+            kind: "overflow-list",
+            depth: 7,
+            indent: 0,
+            insertionIndex: getSubtreeEndIndex(lines, targetNode),
+          };
+    }
+
+    validateOverflowListLine(lines, targetNode);
+    const listLine = parseListSourceLine(getNodeLine(lines, targetNode));
+    if (!listLine) {
+      throw new StructurePatchError("STALE_SOURCE", "The target topic changed.");
+    }
+
+    return {
+      kind: "overflow-list",
+      depth: targetNode.source.depth + 1,
+      indent: listLine.indent + 2,
+      insertionIndex: getSubtreeEndIndex(lines, targetNode),
+    };
+  }
+
+  if (targetNode.source.kind === "heading") {
+    validateHeadingLine(lines, targetNode);
+    return {
+      kind: "heading",
+      depth: targetNode.source.depth,
+      indent: 0,
+      insertionIndex:
+        position === "before"
+          ? getNodeLineIndex(targetNode)
+          : getSubtreeEndIndex(lines, targetNode),
+    };
+  }
+
+  validateOverflowListLine(lines, targetNode);
+  const listLine = parseListSourceLine(getNodeLine(lines, targetNode));
+  if (!listLine) {
+    throw new StructurePatchError("STALE_SOURCE", "The target topic changed.");
+  }
+
+  return {
+    kind: "overflow-list",
+    depth: targetNode.source.depth,
+    indent: listLine.indent,
+    insertionIndex:
+      position === "before"
+        ? getNodeLineIndex(targetNode)
+        : getSubtreeEndIndex(lines, targetNode),
+  };
+}
+
+function getAdjustedInsertionIndex(
+  lines: string[],
+  removedLineCount: number,
+  sourceStartIndex: number,
+  originalInsertionIndex: number,
+): number {
+  const adjusted =
+    sourceStartIndex < originalInsertionIndex
+      ? originalInsertionIndex - removedLineCount
+      : originalInsertionIndex;
+  return Math.max(0, Math.min(getDocumentEndIndex(lines), adjusted));
+}
+
+function rewriteMovedBlock(
+  sourceBlock: string[],
+  node: MindMapNode,
+  targetRoot: MoveTargetSpec,
+): string[] {
+  const rewritten: string[] = [];
+  const sourceRootDepth = node.source.depth;
+  const sourceRootIndent = getRootIndent(node, sourceBlock[0] ?? "");
+  let currentSourceContextDepth = sourceRootDepth;
+  let currentTargetContextDepth = targetRoot.depth;
+
+  for (const line of sourceBlock) {
+    if (line.trim().length === 0) {
+      rewritten.push(line);
+      continue;
+    }
+
+    const heading = parseHeadingSourceLine(line);
+    if (heading) {
+      const relativeDepth = heading.depth - sourceRootDepth;
+      const nextDepth = targetRoot.depth + relativeDepth;
+      currentSourceContextDepth = heading.depth;
+      currentTargetContextDepth = nextDepth;
+      rewritten.push(rewriteStructuralLine(heading.text, nextDepth, "-"));
+      continue;
+    }
+
+    const listLine = parseListSourceLine(line);
+    if (listLine) {
+      const relativeDepth = 7 + Math.floor(listLine.indent / 2) - sourceRootDepth;
+      const nextDepth = targetRoot.depth + relativeDepth;
+      currentSourceContextDepth = 7 + Math.floor(listLine.indent / 2);
+      currentTargetContextDepth = nextDepth;
+      rewritten.push(rewriteStructuralLine(listLine.text, nextDepth, listLine.marker));
+      continue;
+    }
+
+    const currentIndent = getIndentWidth(line);
+    const bodySourceBaseIndent = getBodyBaseIndent(currentSourceContextDepth, sourceRootIndent);
+    const bodyTargetBaseIndent = getBodyBaseIndent(currentTargetContextDepth, targetRoot.indent);
+    const relativeExtraIndent = Math.max(0, currentIndent - bodySourceBaseIndent);
+    rewritten.push(rewriteBodyLine(line, bodyTargetBaseIndent + relativeExtraIndent));
+  }
+
+  return rewritten;
+}
+
+function rewriteStructuralLine(text: string, semanticDepth: number, marker: string): string {
+  if (semanticDepth <= 6) {
+    return buildHeadingLine(semanticDepth, text);
+  }
+
+  return buildListLine(getListIndent(semanticDepth), normalizeListMarker(marker), text);
+}
+
+function rewriteBodyLine(line: string, nextIndent: number): string {
+  const trimmed = line.trimStart();
+  return `${" ".repeat(nextIndent)}${trimmed}`;
+}
+
+function getRootIndent(node: MindMapNode, rootLine: string): number {
+  if (node.source.kind !== "overflow-list") {
+    return 0;
+  }
+
+  const parsed = parseListSourceLine(rootLine);
+  return parsed?.indent ?? 0;
+}
+
+function getListIndent(semanticDepth: number): number {
+  return Math.max(0, (semanticDepth - 7) * 2);
+}
+
+function getBodyBaseIndent(semanticDepth: number, rootIndent: number): number {
+  if (semanticDepth <= 6) {
+    return 0;
+  }
+
+  if (semanticDepth === 7) {
+    return rootIndent + 2;
+  }
+
+  return getListIndent(semanticDepth) + 2;
+}
+
+function hasDescendant(node: MindMapNode, targetId: string): boolean {
+  for (const child of node.children) {
+    if (child.id === targetId || hasDescendant(child, targetId)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function validateHeadingLine(lines: string[], node: MindMapNode): void {

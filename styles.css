@@ -160,6 +160,24 @@
     0 18px 38px rgba(15, 23, 42, 0.12);
 }
 
+.oxm-node.is-drop-target {
+  transition:
+    border-color 100ms ease,
+    box-shadow 100ms ease,
+    background-color 100ms ease;
+}
+
+.oxm-node.is-drop-child {
+  border-color: color-mix(in srgb, var(--text-accent) 54%, white 8%);
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--text-accent) 10%, transparent),
+    0 16px 34px rgba(15, 23, 42, 0.1);
+}
+
+.oxm-node.is-drop-sibling {
+  border-color: color-mix(in srgb, var(--text-accent) 32%, var(--background-modifier-border));
+}
+
 .oxm-fold-badge {
   position: absolute;
   display: inline-flex;
@@ -201,6 +219,28 @@
   min-width: 24px;
   border-color: color-mix(in srgb, var(--text-accent) 34%, var(--background-modifier-border));
   color: color-mix(in srgb, var(--text-accent) 80%, black 2%);
+}
+
+.oxm-drop-indicator {
+  position: absolute;
+  height: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-accent) 76%, white 8%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-accent) 10%, transparent);
+  pointer-events: none;
+  z-index: 7;
+}
+
+.oxm-drop-indicator-dot {
+  position: absolute;
+  left: -5px;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-accent) 80%, white 8%);
+  transform: translateY(-50%);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--text-accent) 10%, transparent);
 }
 
 .oxm-node-content {

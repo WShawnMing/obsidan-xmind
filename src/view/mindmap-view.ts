@@ -32,6 +32,8 @@ import {
   deleteNode,
   insertChildNode,
   insertSiblingNode,
+  moveNode,
+  type MoveNodePosition,
 } from "../write/structure-patch-writer";
 import { TitlePatchError, patchNodeTitle } from "../write/title-patch-writer";
 import type ObsidianXMindPlugin from "../main";
@@ -83,6 +85,11 @@ interface NodeDragState {
   didDrag: boolean;
 }
 
+interface DropPreviewState {
+  targetNodeId: string;
+  position: MoveNodePosition;
+}
+
 export class MindMapView extends ItemView {
   private plugin: ObsidianXMindPlugin;
   private file: TFile | null = null;
@@ -96,6 +103,7 @@ export class MindMapView extends ItemView {
   private nodeLayoutOffsets: Record<string, NodeLayoutOffset> = {};
   private lastRenderedLayout: MindMapLayout | null = null;
   private nodeDragState: NodeDragState | null = null;
+  private dropPreview: DropPreviewState | null = null;
   private suppressNextNodeClick = false;
   private isCommittingEdit = false;
   private viewport = { ...DEFAULT_VIEWPORT };
@@ -180,6 +188,7 @@ export class MindMapView extends ItemView {
       this.nodeLayoutOffsets = {};
       this.lastRenderedLayout = null;
       this.nodeDragState = null;
+      this.dropPreview = null;
       this.endEditing(false);
       this.render();
       return;
@@ -460,6 +469,11 @@ export class MindMapView extends ItemView {
       const elements = this.renderNode(positioned);
       nodes.append(...elements);
     }
+
+    const dropIndicator = this.renderDropIndicator(layout);
+    if (dropIndicator) {
+      nodes.append(dropIndicator);
+    }
   }
 
   private renderNode(positioned: PositionedMindMapNode): HTMLElement[] {
@@ -497,6 +511,13 @@ export class MindMapView extends ItemView {
 
     if (this.nodeDragState?.anchorNodeId === node.id && this.nodeDragState.didDrag) {
       nodeEl.classList.add("is-dragging");
+    }
+
+    if (this.dropPreview?.targetNodeId === node.id) {
+      nodeEl.classList.add("is-drop-target");
+      nodeEl.classList.add(
+        this.dropPreview.position === "child" ? "is-drop-child" : "is-drop-sibling",
+      );
     }
 
     const contentEl = document.createElement("div");
@@ -659,6 +680,33 @@ export class MindMapView extends ItemView {
     });
 
     return button;
+  }
+
+  private renderDropIndicator(layout: MindMapLayout): HTMLElement | null {
+    if (!this.dropPreview || this.dropPreview.position === "child") {
+      return null;
+    }
+
+    const target = layout.nodes.get(this.dropPreview.targetNodeId);
+    if (!target) {
+      return null;
+    }
+
+    const indicator = document.createElement("div");
+    indicator.className = "oxm-drop-indicator";
+    indicator.style.left = `${target.x - 18}px`;
+    indicator.style.width = `${Math.min(96, target.width + 24)}px`;
+    indicator.style.top = `${
+      this.dropPreview.position === "before"
+        ? target.y - 10
+        : target.y + target.height + 8
+    }px`;
+
+    const dot = document.createElement("div");
+    dot.className = "oxm-drop-indicator-dot";
+    indicator.append(dot);
+
+    return indicator;
   }
 
   private onNodePointerDown(event: PointerEvent, nodeId: string): void {
@@ -840,6 +888,7 @@ export class MindMapView extends ItemView {
         };
       }
 
+      this.dropPreview = this.computeDropPreview(event);
       this.render();
       this.renderUndoBar();
       return;
@@ -857,17 +906,22 @@ export class MindMapView extends ItemView {
   private onPointerUp(event: PointerEvent): void {
     if (this.nodeDragState && event.pointerId === this.nodeDragState.pointerId) {
       const didDrag = this.nodeDragState.didDrag;
+      const dropPreview = this.dropPreview;
+      const anchorNodeId = this.nodeDragState.anchorNodeId;
       this.nodeDragState = null;
+      this.dropPreview = null;
       if (this.elements?.surface.hasPointerCapture(event.pointerId)) {
         this.elements.surface.releasePointerCapture(event.pointerId);
       }
 
       if (didDrag) {
         this.suppressNextNodeClick = true;
-        if (this.file) {
+        if (dropPreview) {
+          void this.applyDragMove(anchorNodeId, dropPreview);
+        } else if (this.file) {
           void this.plugin.setLayoutForFile(this.file.path, this.nodeLayoutOffsets);
+          this.render();
         }
-        this.render();
       }
       return;
     }
@@ -1027,6 +1081,115 @@ export class MindMapView extends ItemView {
       new Notice("Failed to restore the deleted topic.");
     }
   }
+
+  private computeDropPreview(event: PointerEvent): DropPreviewState | null {
+    if (!this.lastRenderedLayout || !this.nodeDragState || !this.elements) {
+      return null;
+    }
+
+    const rect = this.elements.surface.getBoundingClientRect();
+    const worldX = (event.clientX - rect.left - this.viewport.x) / this.viewport.scale;
+    const worldY = (event.clientY - rect.top - this.viewport.y) / this.viewport.scale;
+    const dragged = new Set(this.nodeDragState.subtreeNodeIds);
+    let best:
+      | {
+          nodeId: string;
+          position: MoveNodePosition;
+          distance: number;
+        }
+      | null = null;
+
+    for (const positioned of this.lastRenderedLayout.nodes.values()) {
+      const candidate = positioned.node;
+      if (dragged.has(candidate.id) || candidate.source.kind === "linked-note") {
+        continue;
+      }
+
+      const rectDistance = distanceToRect(
+        worldX,
+        worldY,
+        positioned.x,
+        positioned.y,
+        positioned.width,
+        positioned.height,
+      );
+
+      if (rectDistance > 42) {
+        continue;
+      }
+
+      const position = getDropPosition(worldX, worldY, positioned);
+      if (!canPreviewDrop(candidate, position)) {
+        continue;
+      }
+
+      if (!best || rectDistance < best.distance) {
+        best = {
+          nodeId: candidate.id,
+          position,
+          distance: rectDistance,
+        };
+      }
+    }
+
+    return best
+      ? {
+          targetNodeId: best.nodeId,
+          position: best.position,
+        }
+      : null;
+  }
+
+  private async applyDragMove(
+    anchorNodeId: string,
+    dropPreview: DropPreviewState,
+  ): Promise<void> {
+    if (!this.file || !this.parsed) {
+      return;
+    }
+
+    const sourceNode = this.parsed.nodesById.get(anchorNodeId);
+    const targetNode = this.parsed.nodesById.get(dropPreview.targetNodeId);
+    if (!sourceNode || !targetNode) {
+      await this.refresh();
+      return;
+    }
+
+    try {
+      const content = await this.app.vault.read(this.file);
+      const patch = moveNode(
+        content,
+        this.parsed,
+        sourceNode,
+        targetNode,
+        dropPreview.position,
+      );
+      this.pendingSelection = patch.insertedNode
+        ? {
+            source: {
+              type: "inserted",
+              selection: patch.insertedNode,
+              startEditing: false,
+            },
+          }
+        : null;
+      await this.app.vault.modify(this.file, patch.content);
+      await this.refresh();
+    } catch (error) {
+      if (error instanceof StructurePatchError) {
+        new Notice(error.message);
+        if (error.code === "STALE_SOURCE") {
+          await this.refresh();
+        } else {
+          this.render();
+        }
+        return;
+      }
+
+      new Notice("Failed to move the topic.");
+      await this.refresh();
+    }
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -1047,6 +1210,45 @@ function collectSubtreeNodeIds(node: MindMapNode): string[] {
     ids.push(...collectSubtreeNodeIds(child));
   }
   return ids;
+}
+
+function canPreviewDrop(node: MindMapNode, position: MoveNodePosition): boolean {
+  if (position === "child") {
+    return node.source.kind !== "linked-note";
+  }
+
+  return node.source.kind === "heading" || node.source.kind === "overflow-list";
+}
+
+function getDropPosition(
+  worldX: number,
+  worldY: number,
+  positioned: PositionedMindMapNode,
+): MoveNodePosition {
+  if (positioned.node.source.kind === "virtual-root") {
+    return "child";
+  }
+
+  const childThreshold = positioned.x + positioned.width * 0.62;
+  if (worldX >= childThreshold) {
+    return "child";
+  }
+
+  const midY = positioned.y + positioned.height / 2;
+  return worldY <= midY ? "before" : "after";
+}
+
+function distanceToRect(
+  x: number,
+  y: number,
+  rectX: number,
+  rectY: number,
+  rectWidth: number,
+  rectHeight: number,
+): number {
+  const dx = Math.max(rectX - x, 0, x - (rectX + rectWidth));
+  const dy = Math.max(rectY - y, 0, y - (rectY + rectHeight));
+  return Math.hypot(dx, dy);
 }
 
 function findParentNode(root: MindMapNode, targetId: string): MindMapNode | null {
