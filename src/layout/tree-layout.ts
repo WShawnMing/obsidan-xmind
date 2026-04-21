@@ -1,5 +1,6 @@
 import { FOLD_BADGE_OFFSET } from "../constants";
 import type {
+  MindMapConnectionStyle,
   MindMapEdge,
   MindMapLayout,
   MindMapNode,
@@ -18,6 +19,7 @@ const OUTSIDE_BADGE_SPACE = 64;
 export function layoutMindMap(
   root: MindMapNode,
   layoutOffsets: Record<string, NodeLayoutOffset> = {},
+  connectionStyle: MindMapConnectionStyle = "curved",
 ): MindMapLayout {
   const nodes = new Map<string, PositionedMindMapNode>();
   const edgePairs: Array<{ parentId: string; childId: string }> = [];
@@ -78,12 +80,18 @@ export function layoutMindMap(
     const endX = child.x;
     const endY = child.y + child.height / 2;
     const branchAnchorX = startX + FOLD_BADGE_OFFSET;
-    const curve = Math.max(26, (endX - branchAnchorX) * 0.34);
 
     return {
       parentId,
       childId,
-      path: `M ${startX} ${startY} L ${branchAnchorX} ${startY} C ${branchAnchorX + curve} ${startY}, ${endX - curve} ${endY}, ${endX} ${endY}`,
+      path: buildEdgePath(
+        connectionStyle,
+        startX,
+        startY,
+        branchAnchorX,
+        endX,
+        endY,
+      ),
     };
   });
 
@@ -102,6 +110,27 @@ export function layoutMindMap(
       height: maxHeight + PADDING,
     },
   };
+}
+
+function buildEdgePath(
+  connectionStyle: MindMapConnectionStyle,
+  startX: number,
+  startY: number,
+  branchAnchorX: number,
+  endX: number,
+  endY: number,
+): string {
+  if (connectionStyle === "straight") {
+    return `M ${startX} ${startY} L ${endX} ${endY}`;
+  }
+
+  if (connectionStyle === "angled") {
+    const bendX = Math.max(branchAnchorX, startX + (endX - startX) * 0.52);
+    return `M ${startX} ${startY} L ${branchAnchorX} ${startY} L ${bendX} ${startY} L ${bendX} ${endY} L ${endX} ${endY}`;
+  }
+
+  const curve = Math.max(26, (endX - branchAnchorX) * 0.34);
+  return `M ${startX} ${startY} L ${branchAnchorX} ${startY} C ${branchAnchorX + curve} ${startY}, ${endX - curve} ${endY}, ${endX} ${endY}`;
 }
 
 function estimateNodeWidth(node: MindMapNode): number {

@@ -181,6 +181,11 @@ export class MindMapView extends ItemView {
     await this.refresh();
   }
 
+  async handleAppearanceChanged(): Promise<void> {
+    this.applyAppearanceAttributes();
+    this.render();
+  }
+
   async refresh(): Promise<void> {
     if (!this.file) {
       this.parsed = null;
@@ -426,6 +431,7 @@ export class MindMapView extends ItemView {
       undoAction,
       undoDismiss,
     };
+    this.applyAppearanceAttributes();
     this.applyViewport();
     this.renderUndoBar();
   }
@@ -450,7 +456,11 @@ export class MindMapView extends ItemView {
       return;
     }
 
-    const layout = layoutMindMap(this.parsed.root, this.nodeLayoutOffsets);
+    const layout = layoutMindMap(
+      this.parsed.root,
+      this.nodeLayoutOffsets,
+      this.plugin.getAppearanceSettings().connectionStyle,
+    );
     this.lastRenderedLayout = layout;
     stage.style.width = `${layout.bounds.width}px`;
     stage.style.height = `${layout.bounds.height}px`;
@@ -571,6 +581,12 @@ export class MindMapView extends ItemView {
         event.stopPropagation();
         return;
       }
+      if (event.metaKey || event.ctrlKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.jumpToNodeSource(node);
+        return;
+      }
       if ((event.target as HTMLElement).closest(".oxm-token-link")) {
         return;
       }
@@ -589,6 +605,11 @@ export class MindMapView extends ItemView {
     });
     nodeEl.addEventListener("dblclick", () => {
       this.startEditing(node.id);
+    });
+    nodeEl.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.jumpToNodeSource(node);
     });
 
     const elements: HTMLElement[] = [nodeEl];
@@ -1010,6 +1031,13 @@ export class MindMapView extends ItemView {
     this.elements.stage.style.transform = `translate(${this.viewport.x}px, ${this.viewport.y}px) scale(${this.viewport.scale})`;
   }
 
+  private applyAppearanceAttributes(): void {
+    const appearance = this.plugin.getAppearanceSettings();
+    this.contentEl.dataset.oxmBackgroundStyle = appearance.backgroundStyle;
+    this.contentEl.dataset.oxmNodeShape = appearance.nodeShape;
+    this.contentEl.dataset.oxmConnectionStyle = appearance.connectionStyle;
+  }
+
   private renderUndoBar(): void {
     if (!this.elements) {
       return;
@@ -1123,6 +1151,29 @@ export class MindMapView extends ItemView {
     } catch {
       new Notice("Failed to restore the deleted topic.");
     }
+  }
+
+  private async jumpToNodeSource(node: MindMapNode): Promise<void> {
+    if (!this.file) {
+      return;
+    }
+
+    if (node.source.kind === "virtual-root") {
+      await this.plugin.jumpToFilePosition(this.file, 0, 0);
+      return;
+    }
+
+    const span = node.source.span;
+    if (!span) {
+      new Notice("This topic does not have a source position yet.");
+      return;
+    }
+
+    await this.plugin.jumpToFilePosition(
+      this.file,
+      Math.max(0, span.line - 1),
+      Math.max(0, span.column),
+    );
   }
 
   private computeDropPreview(event: PointerEvent): DropPreviewState | null {

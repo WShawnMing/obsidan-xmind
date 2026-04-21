@@ -119,6 +119,22 @@ describe("parseMarkdownToMindMap", () => {
     ]);
   });
 
+  it("records source spans for linked-note nodes", () => {
+    const doc = parseMarkdownToMindMap(
+      file,
+      [
+        "# Root",
+        "## Section",
+        "  [[Article 1]]",
+      ].join("\n"),
+    );
+
+    const linked = doc.root.children[0]?.children[0];
+    expect(linked?.source.kind).toBe("linked-note");
+    expect(linked?.source.span?.line).toBe(3);
+    expect(linked?.source.span?.kind).toBe("linked-note");
+  });
+
   it("ignores ordinary lists when they are not overflow nodes", () => {
     const doc = parseMarkdownToMindMap(
       file,

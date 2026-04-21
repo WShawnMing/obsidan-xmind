@@ -1,19 +1,31 @@
-import { Plugin, TFile, WorkspaceLeaf } from "obsidian";
+import { MarkdownView, Plugin, TFile, WorkspaceLeaf } from "obsidian";
 import { VIEW_TYPE } from "./constants";
-import type { MindMapViewState, NodeLayoutOffset, PluginData } from "./types";
+import {
+  DEFAULT_APPEARANCE_SETTINGS,
+  ObsidianXMindSettingTab,
+} from "./settings";
+import type {
+  AppearanceSettings,
+  MindMapViewState,
+  NodeLayoutOffset,
+  PluginData,
+} from "./types";
 import { MindMapView } from "./view/mindmap-view";
 
 export default class ObsidianXMindPlugin extends Plugin {
   private layoutByFile: Record<string, Record<string, NodeLayoutOffset>> = {};
+  private appearanceSettings: AppearanceSettings = { ...DEFAULT_APPEARANCE_SETTINGS };
 
   async onload(): Promise<void> {
     const data = (await this.loadData()) as PluginData | null;
     this.layoutByFile = normalizeLayoutStore(data?.layoutByFile);
+    this.appearanceSettings = normalizeAppearanceSettings(data?.appearance);
 
     this.registerView(
       VIEW_TYPE,
       (leaf) => new MindMapView(leaf, this),
     );
+    this.addSettingTab(new ObsidianXMindSettingTab(this));
 
     this.addCommand({
       id: "open-mind-map-for-current-note",
@@ -159,6 +171,10 @@ export default class ObsidianXMindPlugin extends Plugin {
     return { ...(this.layoutByFile[filePath] ?? {}) };
   }
 
+  getAppearanceSettings(): AppearanceSettings {
+    return { ...this.appearanceSettings };
+  }
+
   async setLayoutForFile(
     filePath: string,
     layout: Record<string, NodeLayoutOffset>,
@@ -170,6 +186,52 @@ export default class ObsidianXMindPlugin extends Plugin {
     }
 
     await this.persistPluginData();
+  }
+
+  async updateAppearanceSettings(
+    patch: Partial<AppearanceSettings>,
+  ): Promise<void> {
+    this.appearanceSettings = {
+      ...this.appearanceSettings,
+      ...patch,
+    };
+
+    await this.persistPluginData();
+    await this.refreshAllMindMapViews();
+  }
+
+  async jumpToFilePosition(
+    file: TFile,
+    line: number,
+    column: number,
+  ): Promise<void> {
+    const existingLeaf = this.findMarkdownLeafForFile(file.path);
+    const leaf = existingLeaf ?? this.app.workspace.getLeaf(true);
+    await leaf.openFile(file, {
+      active: true,
+      state: {
+        mode: "source",
+      },
+    });
+    this.app.workspace.revealLeaf(leaf);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+
+    if (leaf.view instanceof MarkdownView) {
+      const editor = leaf.view.editor;
+      const target = {
+        line: Math.max(0, line),
+        ch: Math.max(0, column),
+      };
+      editor.setCursor(target);
+      editor.scrollIntoView(
+        {
+          from: target,
+          to: target,
+        },
+        true,
+      );
+      editor.focus();
+    }
   }
 
   async pruneLayoutForFile(filePath: string, validNodeIds: Iterable<string>): Promise<void> {
@@ -207,6 +269,17 @@ export default class ObsidianXMindPlugin extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
       const view = leaf.view;
       if (view instanceof MindMapView && view.isDisplayingFile(filePath)) {
+        return leaf;
+      }
+    }
+
+    return null;
+  }
+
+  private findMarkdownLeafForFile(filePath: string): WorkspaceLeaf | null {
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const view = leaf.view;
+      if (view instanceof MarkdownView && view.file?.path === filePath) {
         return leaf;
       }
     }
@@ -257,7 +330,17 @@ export default class ObsidianXMindPlugin extends Plugin {
   private async persistPluginData(): Promise<void> {
     await this.saveData({
       layoutByFile: this.layoutByFile,
+      appearance: this.appearanceSettings,
     } satisfies PluginData);
+  }
+
+  private async refreshAllMindMapViews(): Promise<void> {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      const view = leaf.view;
+      if (view instanceof MindMapView) {
+        await view.handleAppearanceChanged();
+      }
+    }
   }
 }
 
@@ -296,4 +379,16 @@ function normalizeLayoutStore(
   }
 
   return next;
+}
+
+function normalizeAppearanceSettings(
+  value: PluginData["appearance"],
+): AppearanceSettings {
+  return {
+    backgroundStyle:
+      value?.backgroundStyle ?? DEFAULT_APPEARANCE_SETTINGS.backgroundStyle,
+    nodeShape: value?.nodeShape ?? DEFAULT_APPEARANCE_SETTINGS.nodeShape,
+    connectionStyle:
+      value?.connectionStyle ?? DEFAULT_APPEARANCE_SETTINGS.connectionStyle,
+  };
 }

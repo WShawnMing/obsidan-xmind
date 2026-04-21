@@ -121,6 +121,7 @@ export function parseMarkdownToMindMap(
         file.path,
         line,
         lineIndex,
+        absoluteOffset,
         currentHeadingNode.source.depth,
         nodesById,
       );
@@ -337,6 +338,7 @@ function parseOverflowListBlock(
           filePath,
           line,
           nextIndex,
+          absoluteOffset,
           deepestEntry.depth,
           nodesById,
         );
@@ -405,6 +407,7 @@ function parseLinkedNoteLine(
   filePath: string,
   line: string,
   lineIndex: number,
+  absoluteOffset: number,
   parentDepth: number,
   nodesById: Map<string, MindMapNode>,
 ): MindMapNode[] {
@@ -414,15 +417,27 @@ function parseLinkedNoteLine(
   }
 
   const nodes: MindMapNode[] = [];
+  const lineStartOffset = line.length - line.trimStart().length;
   let linkIndex = 0;
   for (const match of trimmed.matchAll(/\[\[[^[\]]+?\]\]/g)) {
     const rawLink = match[0];
+    const matchIndex = match.index ?? 0;
+    const from = absoluteOffset + lineStartOffset + matchIndex;
+    const to = from + rawLink.length;
     const node = createNode(
       filePath,
       rawLink,
       {
         kind: "linked-note",
         depth: parentDepth + 1,
+        span: {
+          from,
+          to,
+          line: lineIndex + 1,
+          column: lineStartOffset + matchIndex,
+          depth: parentDepth + 1,
+          kind: "linked-note",
+        },
       },
       nodesById,
       `linked-note:${filePath}:${lineIndex + 1}:${linkIndex}`,

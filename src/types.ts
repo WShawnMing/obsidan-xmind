@@ -1,4 +1,7 @@
 export type NodeKind = "virtual-root" | "heading" | "overflow-list" | "linked-note";
+export type MindMapBackgroundStyle = "plain" | "grid" | "dots" | "aurora";
+export type MindMapNodeShape = "pill" | "rounded" | "soft-square";
+export type MindMapConnectionStyle = "curved" | "angled" | "straight";
 
 export interface SourceDocumentRef {
   path: string;
@@ -11,7 +14,7 @@ export interface NodeSourceSpan {
   line: number;
   column: number;
   depth: number;
-  kind: "heading" | "overflow-list";
+  kind: "heading" | "overflow-list" | "linked-note";
 }
 
 export interface MindMapNodeSource {
@@ -89,6 +92,13 @@ export interface NodeLayoutOffset {
   y: number;
 }
 
+export interface AppearanceSettings {
+  backgroundStyle: MindMapBackgroundStyle;
+  nodeShape: MindMapNodeShape;
+  connectionStyle: MindMapConnectionStyle;
+}
+
 export interface PluginData {
   layoutByFile?: Record<string, Record<string, NodeLayoutOffset>>;
+  appearance?: Partial<AppearanceSettings>;
 }
