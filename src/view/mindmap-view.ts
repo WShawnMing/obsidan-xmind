@@ -15,6 +15,13 @@ import type {
   MindMapViewState,
   PositionedMindMapNode,
 } from "../types";
+import {
+  StructurePatchError,
+  type InsertedNodeSelection,
+  deleteNode,
+  insertChildNode,
+  insertSiblingNode,
+} from "../write/structure-patch-writer";
 import { TitlePatchError, patchNodeTitle } from "../write/title-patch-writer";
 import type ObsidianXMindPlugin from "../main";
 
@@ -28,6 +35,19 @@ interface ViewElements {
   nodes: HTMLElement;
 }
 
+interface PendingSelectionState {
+  source:
+    | {
+        type: "inserted";
+        selection: InsertedNodeSelection;
+        startEditing: boolean;
+      }
+    | {
+        type: "node-id";
+        nodeId: string;
+      };
+}
+
 export class MindMapView extends ItemView {
   private plugin: ObsidianXMindPlugin;
   private file: TFile | null = null;
@@ -36,6 +56,7 @@ export class MindMapView extends ItemView {
   private selectedNodeId: string | null = null;
   private editingNodeId: string | null = null;
   private editorInput: HTMLInputElement | null = null;
+  private pendingSelection: PendingSelectionState | null = null;
   private isCommittingEdit = false;
   private viewport = { ...DEFAULT_VIEWPORT };
   private panState:
@@ -147,6 +168,9 @@ export class MindMapView extends ItemView {
 
     this.parsed = parsed;
     this.endEditing(false);
+    if (this.pendingSelection) {
+      this.applyPendingSelection(parsed);
+    }
     if (!this.selectedNodeId || !parsed.nodesById.has(this.selectedNodeId)) {
       this.selectedNodeId = parsed.root.id;
     }
@@ -158,6 +182,77 @@ export class MindMapView extends ItemView {
       return;
     }
     this.startEditing(this.selectedNodeId);
+  }
+
+  async addSiblingNode(): Promise<void> {
+    if (!this.file || !this.parsed || !this.selectedNodeId) {
+      return;
+    }
+
+    const node = this.parsed.nodesById.get(this.selectedNodeId);
+    if (!node) {
+      return;
+    }
+
+    if (this.parsed.root.id === node.id) {
+      new Notice("The root topic only supports child topics.");
+      return;
+    }
+
+    await this.applyStructureEdit(insertSiblingNode, node);
+  }
+
+  async addChildNode(): Promise<void> {
+    if (!this.file || !this.parsed || !this.selectedNodeId) {
+      return;
+    }
+
+    const node = this.parsed.nodesById.get(this.selectedNodeId);
+    if (!node) {
+      return;
+    }
+
+    await this.applyStructureEdit(insertChildNode, node);
+  }
+
+  async deleteSelectedNode(): Promise<void> {
+    if (!this.file || !this.parsed || !this.selectedNodeId) {
+      return;
+    }
+
+    const node = this.parsed.nodesById.get(this.selectedNodeId);
+    if (!node) {
+      return;
+    }
+
+    const parent = findParentNode(this.parsed.root, node.id);
+
+    try {
+      const content = await this.app.vault.read(this.file);
+      const nextContent = deleteNode(content, this.parsed, node);
+      this.pendingSelection = parent
+        ? {
+            source: {
+              type: "node-id",
+              nodeId: parent.id,
+            },
+          }
+        : null;
+      if (nextContent !== content) {
+        await this.app.vault.modify(this.file, nextContent);
+      }
+      await this.refresh();
+    } catch (error) {
+      if (error instanceof StructurePatchError) {
+        new Notice(error.message);
+        if (error.code === "STALE_SOURCE") {
+          await this.refresh();
+        }
+        return;
+      }
+
+      new Notice("Failed to delete the selected topic.");
+    }
   }
 
   private buildUi(): void {
@@ -394,7 +489,10 @@ export class MindMapView extends ItemView {
     }
 
     const node = this.parsed.nodesById.get(nodeId);
-    if (!node || node.source.kind === "virtual-root") {
+    if (
+      !node ||
+      (node.source.kind !== "heading" && node.source.kind !== "overflow-list")
+    ) {
       return;
     }
 
@@ -493,7 +591,33 @@ export class MindMapView extends ItemView {
       return;
     }
 
-    if (event.key === "Enter" && this.selectedNodeId) {
+    if ((event.metaKey || event.ctrlKey || event.altKey) && event.key !== "Backspace") {
+      return;
+    }
+
+    if (!this.selectedNodeId) {
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void this.addSiblingNode();
+      return;
+    }
+
+    if (event.key === "Tab" && !event.shiftKey) {
+      event.preventDefault();
+      void this.addChildNode();
+      return;
+    }
+
+    if (event.key === "Delete" || event.key === "Backspace") {
+      event.preventDefault();
+      void this.deleteSelectedNode();
+      return;
+    }
+
+    if (event.key === "F2") {
       event.preventDefault();
       this.startEditing(this.selectedNodeId);
     }
@@ -566,6 +690,69 @@ export class MindMapView extends ItemView {
 
     this.elements.stage.style.transform = `translate(${this.viewport.x}px, ${this.viewport.y}px) scale(${this.viewport.scale})`;
   }
+
+  private applyPendingSelection(parsed: MindMapDocument): void {
+    const pending = this.pendingSelection;
+    this.pendingSelection = null;
+
+    if (!pending) {
+      return;
+    }
+
+    if (pending.source.type === "node-id") {
+      if (parsed.nodesById.has(pending.source.nodeId)) {
+        this.selectedNodeId = pending.source.nodeId;
+      }
+      return;
+    }
+
+    const match = findInsertedNode(parsed, pending.source.selection);
+    if (!match) {
+      return;
+    }
+
+    this.selectedNodeId = match.id;
+    if (pending.source.startEditing) {
+      this.editingNodeId = match.id;
+    }
+  }
+
+  private async applyStructureEdit(
+    patchFn: typeof insertSiblingNode | typeof insertChildNode,
+    node: MindMapNode,
+  ): Promise<void> {
+    if (!this.file) {
+      return;
+    }
+
+    try {
+      const content = await this.app.vault.read(this.file);
+      const patch = patchFn(content, node);
+      this.pendingSelection = patch.insertedNode
+        ? {
+            source: {
+              type: "inserted",
+              selection: patch.insertedNode,
+              startEditing: true,
+            },
+          }
+        : null;
+      if (patch.content !== content) {
+        await this.app.vault.modify(this.file, patch.content);
+      }
+      await this.refresh();
+    } catch (error) {
+      if (error instanceof StructurePatchError) {
+        new Notice(error.message);
+        if (error.code === "STALE_SOURCE") {
+          await this.refresh();
+        }
+        return;
+      }
+
+      new Notice("Failed to update the note structure.");
+    }
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -578,4 +765,37 @@ function countDescendants(node: MindMapNode): number {
     count += 1 + countDescendants(child);
   }
   return count;
+}
+
+function findParentNode(root: MindMapNode, targetId: string): MindMapNode | null {
+  for (const child of root.children) {
+    if (child.id === targetId) {
+      return root;
+    }
+
+    const parent = findParentNode(child, targetId);
+    if (parent) {
+      return parent;
+    }
+  }
+
+  return null;
+}
+
+function findInsertedNode(
+  document: MindMapDocument,
+  selection: InsertedNodeSelection,
+): MindMapNode | null {
+  for (const node of document.nodesById.values()) {
+    if (
+      node.source.kind === selection.kind &&
+      node.source.span?.line === selection.line &&
+      node.source.depth === selection.depth &&
+      node.text === selection.text
+    ) {
+      return node;
+    }
+  }
+
+  return null;
 }

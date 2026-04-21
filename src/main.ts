@@ -42,6 +42,70 @@ export default class ObsidianXMindPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "mind-map-add-sibling-topic",
+      name: "Mind map: Add sibling topic",
+      checkCallback: (checking) => {
+        const view = this.getActiveMindMapView();
+        if (!view) {
+          return false;
+        }
+
+        if (!checking) {
+          void view.addSiblingNode();
+        }
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: "mind-map-add-child-topic",
+      name: "Mind map: Add child topic",
+      checkCallback: (checking) => {
+        const view = this.getActiveMindMapView();
+        if (!view) {
+          return false;
+        }
+
+        if (!checking) {
+          void view.addChildNode();
+        }
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: "mind-map-delete-selected-topic",
+      name: "Mind map: Delete selected topic",
+      checkCallback: (checking) => {
+        const view = this.getActiveMindMapView();
+        if (!view) {
+          return false;
+        }
+
+        if (!checking) {
+          void view.deleteSelectedNode();
+        }
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: "mind-map-edit-selected-topic",
+      name: "Mind map: Edit selected topic",
+      checkCallback: (checking) => {
+        const view = this.getActiveMindMapView();
+        if (!view) {
+          return false;
+        }
+
+        if (!checking) {
+          void view.editSelectedNode();
+        }
+        return true;
+      },
+    });
+
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
         if (file instanceof TFile) {
