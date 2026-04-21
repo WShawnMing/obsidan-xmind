@@ -1,4 +1,4 @@
-export type NodeKind = "virtual-root" | "heading" | "overflow-list";
+export type NodeKind = "virtual-root" | "heading" | "overflow-list" | "linked-note";
 
 export interface SourceDocumentRef {
   path: string;

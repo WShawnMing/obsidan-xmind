@@ -8,6 +8,7 @@ import type {
 
 const HEADING_REGEX = /^(#{1,6})([ \t]+)(.*?)([ \t]+#+[ \t]*)?$/;
 const LIST_ITEM_REGEX = /^(\s*)([-+*]|\d+[.)])([ \t]+)(.*)$/;
+const PURE_WIKILINK_LINE_REGEX = /^(?:\[\[[^[\]]+?\]\](?:\s+|$))+$/;
 
 interface HeadingStackEntry {
   depth: number;
@@ -114,6 +115,22 @@ export function parseMarkdownToMindMap(
       continue;
     }
 
+    const currentHeadingNode = headingStack[headingStack.length - 1]?.node ?? null;
+    if (currentHeadingNode) {
+      const linkedNotes = parseLinkedNoteLine(
+        file.path,
+        line,
+        lineIndex,
+        currentHeadingNode.source.depth,
+        nodesById,
+      );
+
+      if (linkedNotes.length > 0) {
+        currentHeadingNode.children.push(...linkedNotes);
+        continue;
+      }
+    }
+
     if (pendingOverflowParent) {
       if (line.trim().length === 0) {
         continue;
@@ -134,8 +151,7 @@ export function parseMarkdownToMindMap(
         pendingOverflowParent = null;
         continue;
       }
-
-      pendingOverflowParent = null;
+      continue;
     }
   }
 
@@ -314,8 +330,19 @@ function parseOverflowListBlock(
     }
 
     if (stack.length > 0) {
-      const deepestIndent = stack[stack.length - 1]!.indent;
-      if (getIndentWidth(line) > deepestIndent) {
+      const deepestEntry = stack[stack.length - 1]!;
+      const currentIndent = getIndentWidth(line);
+      if (currentIndent > deepestEntry.indent) {
+        const linkedNotes = parseLinkedNoteLine(
+          filePath,
+          line,
+          nextIndex,
+          deepestEntry.depth,
+          nodesById,
+        );
+        if (linkedNotes.length > 0) {
+          deepestEntry.node.children.push(...linkedNotes);
+        }
         nextIndex += 1;
         continue;
       }
@@ -372,4 +399,37 @@ function getIndentWidth(value: string): number {
     width += char === "\t" ? 4 : 1;
   }
   return width;
+}
+
+function parseLinkedNoteLine(
+  filePath: string,
+  line: string,
+  lineIndex: number,
+  parentDepth: number,
+  nodesById: Map<string, MindMapNode>,
+): MindMapNode[] {
+  const trimmed = line.trim();
+  if (!PURE_WIKILINK_LINE_REGEX.test(trimmed)) {
+    return [];
+  }
+
+  const nodes: MindMapNode[] = [];
+  let linkIndex = 0;
+  for (const match of trimmed.matchAll(/\[\[[^[\]]+?\]\]/g)) {
+    const rawLink = match[0];
+    const node = createNode(
+      filePath,
+      rawLink,
+      {
+        kind: "linked-note",
+        depth: parentDepth + 1,
+      },
+      nodesById,
+      `linked-note:${filePath}:${lineIndex + 1}:${linkIndex}`,
+    );
+    nodes.push(node);
+    linkIndex += 1;
+  }
+
+  return nodes;
 }

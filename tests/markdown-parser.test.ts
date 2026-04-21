@@ -59,6 +59,66 @@ describe("parseMarkdownToMindMap", () => {
     expect(level6?.children[0]?.children[0]?.text).toBe("Level 8");
   });
 
+  it("keeps parsing overflow lists when plain text appears between H6 and the list", () => {
+    const doc = parseMarkdownToMindMap(
+      file,
+      [
+        "# Root",
+        "###### Level 6",
+        "Some supporting note",
+        "- Level 7",
+        "  - Level 8",
+      ].join("\n"),
+    );
+
+    const level6 = doc.root.children[0];
+    expect(level6?.children[0]?.text).toBe("Level 7");
+    expect(level6?.children[0]?.children[0]?.text).toBe("Level 8");
+  });
+
+  it("creates linked-note children from pure wikilink lines under headings", () => {
+    const doc = parseMarkdownToMindMap(
+      file,
+      [
+        "# Root",
+        "## Section",
+        "[[Article 1]]",
+        "[[Article 2|Alias 2]]",
+      ].join("\n"),
+    );
+
+    const section = doc.root.children[0];
+    expect(section?.children.map((node) => node.source.kind)).toEqual([
+      "linked-note",
+      "linked-note",
+    ]);
+    expect(section?.children.map((node) => node.label)).toEqual([
+      "Article 1",
+      "Alias 2",
+    ]);
+  });
+
+  it("creates linked-note children under overflow list items", () => {
+    const doc = parseMarkdownToMindMap(
+      file,
+      [
+        "# Root",
+        "###### Level 6",
+        "- Level 7",
+        "  [[Article 1]]",
+        "  [[Article 2]]",
+        "  - Level 8",
+      ].join("\n"),
+    );
+
+    const level7 = doc.root.children[0]?.children[0];
+    expect(level7?.children.map((node) => node.label)).toEqual([
+      "Article 1",
+      "Article 2",
+      "Level 8",
+    ]);
+  });
+
   it("ignores ordinary lists when they are not overflow nodes", () => {
     const doc = parseMarkdownToMindMap(
       file,

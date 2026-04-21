@@ -22,7 +22,6 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 
 interface ViewElements {
   toolbarTitle: HTMLElement;
-  toolbarSubtitle: HTMLElement;
   refreshButton: HTMLButtonElement;
   surface: HTMLElement;
   empty: HTMLElement;
@@ -175,9 +174,7 @@ export class MindMapView extends ItemView {
     toolbarMeta.className = "oxm-toolbar-meta";
     const toolbarTitle = document.createElement("div");
     toolbarTitle.className = "oxm-toolbar-title";
-    const toolbarSubtitle = document.createElement("div");
-    toolbarSubtitle.className = "oxm-toolbar-subtitle";
-    toolbarMeta.append(toolbarTitle, toolbarSubtitle);
+    toolbarMeta.append(toolbarTitle);
 
     const toolbarActions = document.createElement("div");
     toolbarActions.className = "oxm-toolbar-actions";
@@ -225,7 +222,6 @@ export class MindMapView extends ItemView {
     this.contentEl.append(toolbar, surface);
     this.elements = {
       toolbarTitle,
-      toolbarSubtitle,
       refreshButton,
       surface,
       empty,
@@ -241,14 +237,11 @@ export class MindMapView extends ItemView {
       return;
     }
 
-    const { toolbarTitle, toolbarSubtitle, refreshButton, empty, stage, svg, nodes } =
+    const { toolbarTitle, refreshButton, empty, stage, svg, nodes } =
       this.elements;
 
     refreshButton.disabled = !this.file;
     toolbarTitle.textContent = this.file ? this.file.basename : "No Markdown note selected";
-    toolbarSubtitle.textContent = this.file
-      ? "Single-sided heading map"
-      : "Open a Markdown note and run “Open mind map for current note”.";
 
     svg.replaceChildren();
     nodes.replaceChildren();
@@ -257,7 +250,7 @@ export class MindMapView extends ItemView {
       stage.style.width = "0px";
       stage.style.height = "0px";
       empty.hidden = false;
-      empty.textContent = "Open a Markdown note to render it as a mind map.";
+      empty.textContent = "Open a Markdown note and run “Open mind map for current note”.";
       return;
     }
 
@@ -283,7 +276,8 @@ export class MindMapView extends ItemView {
 
   private renderNode(positioned: PositionedMindMapNode): HTMLElement {
     const node = positioned.node;
-    const editable = node.source.kind !== "virtual-root";
+    const editable =
+      node.source.kind === "heading" || node.source.kind === "overflow-list";
     const nodeEl = document.createElement("div");
     nodeEl.className = "oxm-node";
     nodeEl.style.left = `${positioned.x}px`;
@@ -299,8 +293,16 @@ export class MindMapView extends ItemView {
       nodeEl.classList.add("is-root");
     }
 
+    if (node.source.kind === "linked-note") {
+      nodeEl.classList.add("is-linked-note");
+    }
+
     if (!editable) {
       nodeEl.classList.add("is-readonly");
+    }
+
+    if (this.editingNodeId === node.id) {
+      nodeEl.classList.add("is-editing");
     }
 
     if (node.children.length > 0) {
@@ -344,7 +346,8 @@ export class MindMapView extends ItemView {
       this.editorInput = input;
       window.requestAnimationFrame(() => {
         input.focus();
-        input.select();
+        const end = input.value.length;
+        input.setSelectionRange(end, end);
       });
     } else {
       for (const token of node.tokens) {
@@ -357,6 +360,15 @@ export class MindMapView extends ItemView {
       if ((event.target as HTMLElement).closest(".oxm-token-link")) {
         return;
       }
+      if (this.editingNodeId === node.id) {
+        return;
+      }
+
+      if (this.selectedNodeId === node.id && editable) {
+        this.startEditing(node.id);
+        return;
+      }
+
       this.selectedNodeId = node.id;
       this.contentEl.focus();
       this.render();

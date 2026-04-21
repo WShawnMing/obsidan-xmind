@@ -3,10 +3,7 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background:
-    radial-gradient(circle at top left, rgba(77, 182, 172, 0.08), transparent 28%),
-    radial-gradient(circle at bottom right, rgba(255, 202, 40, 0.08), transparent 24%),
-    var(--background-primary);
+  background: var(--background-primary);
 }
 
 .oxm-toolbar {
@@ -14,30 +11,34 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 16px;
+  padding: 18px 22px 14px;
   border-bottom: 1px solid var(--background-modifier-border);
-  background: color-mix(in srgb, var(--background-secondary) 88%, transparent);
+  background: color-mix(in srgb, var(--background-primary) 96%, transparent);
+  backdrop-filter: blur(18px);
 }
 
 .oxm-toolbar-meta {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
   min-width: 0;
 }
 
 .oxm-toolbar-title {
-  font-size: 15px;
-  font-weight: 700;
+  font-family:
+    "SF Pro Display",
+    "SF Pro Text",
+    "Google Sans",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-size: 18px;
+  line-height: 1.2;
+  font-weight: 680;
+  letter-spacing: -0.02em;
   color: var(--text-normal);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.oxm-toolbar-subtitle {
-  font-size: 12px;
-  color: var(--text-muted);
 }
 
 .oxm-toolbar-actions {
@@ -49,16 +50,18 @@
 .oxm-button {
   border: 1px solid var(--background-modifier-border);
   border-radius: 999px;
-  background: var(--interactive-normal);
+  background: color-mix(in srgb, var(--background-secondary) 76%, white 24%);
   color: var(--text-normal);
   font-size: 12px;
   line-height: 1;
-  padding: 8px 12px;
+  font-weight: 600;
+  padding: 8px 13px;
   cursor: pointer;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
 .oxm-button:hover {
-  background: var(--interactive-hover);
+  background: color-mix(in srgb, var(--background-secondary) 68%, white 32%);
 }
 
 .oxm-button:disabled {
@@ -73,6 +76,8 @@
   overflow: hidden;
   cursor: grab;
   user-select: none;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--background-primary) 96%, white 4%), var(--background-primary));
 }
 
 .oxm-surface.is-panning {
@@ -81,17 +86,18 @@
 
 .oxm-empty {
   position: absolute;
-  inset: 24px;
+  left: 24px;
+  top: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: 10px 14px;
   text-align: center;
   color: var(--text-muted);
-  font-size: 14px;
-  border: 1px dashed var(--background-modifier-border);
-  border-radius: 20px;
-  background: color-mix(in srgb, var(--background-secondary) 85%, transparent);
+  font-size: 12px;
+  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 78%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--background-secondary) 80%, transparent);
 }
 
 .oxm-stage {
@@ -112,8 +118,8 @@
 
 .oxm-line {
   fill: none;
-  stroke: color-mix(in srgb, var(--text-accent) 28%, var(--background-modifier-border));
-  stroke-width: 2;
+  stroke: color-mix(in srgb, var(--text-accent) 18%, var(--background-modifier-border));
+  stroke-width: 2.25;
   stroke-linecap: round;
 }
 
@@ -128,59 +134,103 @@
   display: flex;
   align-items: stretch;
   gap: 8px;
-  padding: 8px 12px;
-  border-radius: 16px;
-  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 85%, transparent);
-  background: color-mix(in srgb, var(--background-primary) 92%, var(--background-secondary));
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+  padding: 10px 14px;
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 84%, transparent);
+  background: color-mix(in srgb, var(--background-primary) 94%, white 6%);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 12px 28px rgba(15, 23, 42, 0.05);
   color: var(--text-normal);
   cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    background-color 140ms ease;
 }
 
 .oxm-node:hover {
-  border-color: color-mix(in srgb, var(--text-accent) 45%, var(--background-modifier-border));
+  border-color: color-mix(in srgb, var(--text-accent) 38%, var(--background-modifier-border));
+  box-shadow:
+    0 2px 4px rgba(15, 23, 42, 0.04),
+    0 16px 32px rgba(15, 23, 42, 0.08);
 }
 
 .oxm-node.is-selected {
-  border-color: color-mix(in srgb, var(--text-accent) 80%, white 10%);
+  border-color: color-mix(in srgb, var(--text-accent) 64%, white 8%);
   box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--text-accent) 18%, transparent),
-    0 14px 28px rgba(15, 23, 42, 0.1);
+    0 0 0 4px color-mix(in srgb, var(--text-accent) 12%, transparent),
+    0 18px 36px rgba(15, 23, 42, 0.09);
 }
 
 .oxm-node.is-root {
   background:
-    linear-gradient(135deg, rgba(77, 182, 172, 0.18), rgba(255, 202, 40, 0.2)),
-    var(--background-primary);
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--text-accent) 10%, white 90%),
+      color-mix(in srgb, var(--background-primary) 92%, white 8%)
+    );
+  border-color: color-mix(in srgb, var(--text-accent) 24%, var(--background-modifier-border));
 }
 
 .oxm-node.is-readonly {
-  opacity: 0.92;
+  opacity: 0.96;
+}
+
+.oxm-node.is-linked-note {
+  padding: 6px 10px;
+  border-radius: 14px;
+  border-color: color-mix(in srgb, var(--text-accent) 12%, transparent);
+  background: color-mix(in srgb, var(--text-accent) 5%, transparent);
+  box-shadow: none;
+}
+
+.oxm-node.is-linked-note:hover {
+  border-color: color-mix(in srgb, var(--text-accent) 24%, transparent);
+  box-shadow: none;
+}
+
+.oxm-node.is-editing {
+  border-color: color-mix(in srgb, var(--text-accent) 58%, white 8%);
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--text-accent) 14%, transparent),
+    0 18px 36px rgba(15, 23, 42, 0.08);
 }
 
 .oxm-node-toggle {
   align-self: center;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border: 0;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--interactive-accent) 14%, transparent);
-  color: var(--text-accent);
+  background: color-mix(in srgb, var(--background-secondary) 78%, transparent);
+  color: var(--text-muted);
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
 }
 
 .oxm-node-toggle:hover {
-  background: color-mix(in srgb, var(--interactive-accent) 22%, transparent);
+  background: color-mix(in srgb, var(--background-secondary) 94%, transparent);
+  color: var(--text-normal);
 }
 
 .oxm-node-content {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
   overflow: hidden;
+  font-family:
+    "SF Pro Text",
+    "Google Sans Text",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-size: 14px;
+  font-weight: 560;
+  letter-spacing: -0.01em;
 }
 
 .oxm-token-text,
@@ -198,7 +248,7 @@
   cursor: pointer;
   text-decoration: underline;
   text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
+  text-underline-offset: 2px;
 }
 
 .oxm-token-link:hover {
@@ -219,14 +269,15 @@
   color: var(--text-normal);
   font: inherit;
   outline: none;
+  caret-color: var(--text-accent);
 }
 
 @media (max-width: 720px) {
   .oxm-toolbar {
-    padding: 10px 12px;
+    padding: 14px 14px 12px;
   }
 
   .oxm-node {
-    border-radius: 14px;
+    border-radius: 16px;
   }
 }
