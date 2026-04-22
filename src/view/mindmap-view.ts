@@ -334,6 +334,78 @@ export class MindMapView extends ItemView {
     );
   }
 
+  canNavigateSelection(): boolean {
+    return (
+      !!this.parsed &&
+      !!this.selectedNodeId &&
+      !this.editingNodeId &&
+      !!this.lastRenderedLayout
+    );
+  }
+
+  navigateSelection(direction: "left" | "right" | "up" | "down"): void {
+    if (!this.parsed || !this.selectedNodeId || !this.lastRenderedLayout) {
+      return;
+    }
+
+    const currentNode = this.parsed.nodesById.get(this.selectedNodeId);
+    if (!currentNode) {
+      return;
+    }
+
+    if (direction === "left") {
+      if (currentNode.children.length > 0 && !currentNode.collapsed) {
+        currentNode.collapsed = true;
+        this.render();
+        return;
+      }
+
+      const parent = findParentNode(this.parsed.root, currentNode.id);
+      if (parent) {
+        this.selectedNodeId = parent.id;
+        this.contentEl.focus();
+        this.render();
+      }
+      return;
+    }
+
+    if (direction === "right") {
+      if (currentNode.children.length === 0) {
+        return;
+      }
+
+      if (currentNode.collapsed) {
+        currentNode.collapsed = false;
+        this.render();
+        return;
+      }
+
+      const firstChild = currentNode.children[0];
+      if (firstChild) {
+        this.selectedNodeId = firstChild.id;
+        this.contentEl.focus();
+        this.render();
+      }
+      return;
+    }
+
+    const orderedNodes = getVisibleNodesByVisualOrder(this.lastRenderedLayout);
+    const currentIndex = orderedNodes.findIndex(({ node }) => node.id === currentNode.id);
+    if (currentIndex === -1) {
+      return;
+    }
+
+    const target =
+      direction === "up" ? orderedNodes[currentIndex - 1] : orderedNodes[currentIndex + 1];
+    if (!target) {
+      return;
+    }
+
+    this.selectedNodeId = target.node.id;
+    this.contentEl.focus();
+    this.render();
+  }
+
   async undoLastAction(): Promise<void> {
     if (!this.file) {
       return;
@@ -1733,6 +1805,24 @@ function buildPreviewCurve(
   const curve = Math.max(26, delta * 0.34);
   const direction = endX >= startX ? 1 : -1;
   return `M ${startX} ${startY} C ${startX + curve * direction} ${startY}, ${endX - curve * direction} ${endY}, ${endX} ${endY}`;
+}
+
+function getVisibleNodesByVisualOrder(
+  layout: MindMapLayout,
+): PositionedMindMapNode[] {
+  return [...layout.nodes.values()].sort((left, right) => {
+    const leftCenterY = left.y + left.height / 2;
+    const rightCenterY = right.y + right.height / 2;
+    if (leftCenterY !== rightCenterY) {
+      return leftCenterY - rightCenterY;
+    }
+
+    if (left.depth !== right.depth) {
+      return left.depth - right.depth;
+    }
+
+    return left.x - right.x;
+  });
 }
 
 function shouldStartTypingEdit(event: KeyboardEvent): boolean {

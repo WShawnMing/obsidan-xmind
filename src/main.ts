@@ -120,6 +120,94 @@ export default class ObsidianXMindPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "mind-map-select-topic-left",
+      name: "Mind map: Select topic to the left",
+      hotkeys: [
+        {
+          modifiers: [],
+          key: "ArrowLeft",
+        },
+      ],
+      checkCallback: (checking) => {
+        const view = this.getActiveMindMapView();
+        if (!view || !view.canNavigateSelection()) {
+          return false;
+        }
+
+        if (!checking) {
+          view.navigateSelection("left");
+        }
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: "mind-map-select-topic-right",
+      name: "Mind map: Select topic to the right",
+      hotkeys: [
+        {
+          modifiers: [],
+          key: "ArrowRight",
+        },
+      ],
+      checkCallback: (checking) => {
+        const view = this.getActiveMindMapView();
+        if (!view || !view.canNavigateSelection()) {
+          return false;
+        }
+
+        if (!checking) {
+          view.navigateSelection("right");
+        }
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: "mind-map-select-topic-up",
+      name: "Mind map: Select topic above",
+      hotkeys: [
+        {
+          modifiers: [],
+          key: "ArrowUp",
+        },
+      ],
+      checkCallback: (checking) => {
+        const view = this.getActiveMindMapView();
+        if (!view || !view.canNavigateSelection()) {
+          return false;
+        }
+
+        if (!checking) {
+          view.navigateSelection("up");
+        }
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: "mind-map-select-topic-down",
+      name: "Mind map: Select topic below",
+      hotkeys: [
+        {
+          modifiers: [],
+          key: "ArrowDown",
+        },
+      ],
+      checkCallback: (checking) => {
+        const view = this.getActiveMindMapView();
+        if (!view || !view.canNavigateSelection()) {
+          return false;
+        }
+
+        if (!checking) {
+          view.navigateSelection("down");
+        }
+        return true;
+      },
+    });
+
+    this.addCommand({
       id: "mind-map-edit-selected-topic",
       name: "Mind map: Edit selected topic",
       checkCallback: (checking) => {
