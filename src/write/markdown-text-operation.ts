@@ -224,10 +224,10 @@ function requireStructuralNode(document: MindMapDocument, nodeId: string): MindM
       "The canvas root cannot be edited as a standalone topic.",
     );
   }
-  if (node.source.kind === "linked-note") {
+  if (node.source.kind === "linked-note" || node.source.kind === "image-embed") {
     throw new StructurePatchError(
       "NOT_EDITABLE",
-      "Linked-note items are derived from Markdown and cannot be edited directly yet.",
+      "Derived attachment items are read-only in the mind map.",
     );
   }
   return node;
@@ -235,10 +235,10 @@ function requireStructuralNode(document: MindMapDocument, nodeId: string): MindM
 
 function requireInsertableNode(document: MindMapDocument, nodeId: string): MindMapNode {
   const node = requireExistingNode(document, nodeId);
-  if (node.source.kind === "linked-note") {
+  if (node.source.kind === "linked-note" || node.source.kind === "image-embed") {
     throw new StructurePatchError(
       "NOT_EDITABLE",
-      "Linked-note items are derived from Markdown and cannot create child topics yet.",
+      "Derived attachment items are read-only in the mind map.",
     );
   }
   return node;
@@ -246,7 +246,11 @@ function requireInsertableNode(document: MindMapDocument, nodeId: string): MindM
 
 function requireTitleNode(document: MindMapDocument, nodeId: string): MindMapNode {
   const node = requireExistingNode(document, nodeId);
-  if (node.source.kind === "virtual-root" || node.source.kind === "linked-note") {
+  if (
+    node.source.kind === "virtual-root" ||
+    node.source.kind === "linked-note" ||
+    node.source.kind === "image-embed"
+  ) {
     throw new TitlePatchError("NOT_EDITABLE", "Only structural Markdown nodes can be renamed.");
   }
   return node;

@@ -13,6 +13,7 @@ import {
   TFile,
   WorkspaceLeaf,
   getLinkpath,
+  normalizePath,
 } from "obsidian";
 import {
   DEFAULT_VIEWPORT,
@@ -393,7 +394,11 @@ export class MindMapView extends ItemView {
       return true;
     }
 
-    return node.source.kind !== "linked-note" && this.plugin.hasMindMapClipboard();
+    return (
+      node.source.kind !== "linked-note" &&
+      node.source.kind !== "image-embed" &&
+      this.plugin.hasMindMapClipboard()
+    );
   }
 
   canDeleteSelectedNode(): boolean {
@@ -415,7 +420,8 @@ export class MindMapView extends ItemView {
     return (
       node.id !== this.parsed.root.id &&
       node.source.kind !== "virtual-root" &&
-      node.source.kind !== "linked-note"
+      node.source.kind !== "linked-note" &&
+      node.source.kind !== "image-embed"
     );
   }
 
@@ -962,6 +968,10 @@ export class MindMapView extends ItemView {
       nodeEl.classList.add("is-linked-note");
     }
 
+    if (node.source.kind === "image-embed") {
+      nodeEl.classList.add("is-image-embed");
+    }
+
     if (!editable) {
       nodeEl.classList.add("is-readonly");
     }
@@ -1032,6 +1042,8 @@ export class MindMapView extends ItemView {
         input.setSelectionRange(end, end);
       });
       this.editingSeedText = null;
+    } else if (node.source.kind === "image-embed") {
+      contentEl.append(this.renderImageEmbed(node));
     } else {
       for (const token of node.tokens) {
         contentEl.append(this.renderToken(token));
@@ -1141,6 +1153,38 @@ export class MindMapView extends ItemView {
     });
 
     return button;
+  }
+
+  private renderImageEmbed(node: MindMapNode): HTMLElement {
+    const wrapper = document.createElement("div");
+    wrapper.className = "oxm-image-card";
+
+    const media = document.createElement("div");
+    media.className = "oxm-image-media";
+    const image = node.image;
+    const resolvedSource = image ? this.resolveImageSource(image.target) : null;
+
+    if (image && resolvedSource) {
+      const img = document.createElement("img");
+      img.className = "oxm-image-preview";
+      img.src = resolvedSource;
+      img.alt = image.alt || node.label || "Image";
+      img.loading = "lazy";
+      img.draggable = false;
+      media.append(img);
+    } else {
+      const placeholder = document.createElement("div");
+      placeholder.className = "oxm-image-placeholder";
+      placeholder.textContent = image?.alt || node.label || "Image";
+      media.append(placeholder);
+      media.classList.add("is-missing");
+    }
+
+    const caption = document.createElement("div");
+    caption.className = "oxm-image-caption";
+    caption.textContent = node.label || image?.target || "Image";
+    wrapper.append(media, caption);
+    return wrapper;
   }
 
   private startEditing(nodeId: string, seedText: string | null = null): void {
@@ -2031,7 +2075,11 @@ export class MindMapView extends ItemView {
 
     for (const positioned of this.lastRenderedLayout.nodes.values()) {
       const candidate = positioned.node;
-      if (dragged.has(candidate.id) || candidate.source.kind === "linked-note") {
+      if (
+        dragged.has(candidate.id) ||
+        candidate.source.kind === "linked-note" ||
+        candidate.source.kind === "image-embed"
+      ) {
         continue;
       }
 
@@ -2223,6 +2271,44 @@ export class MindMapView extends ItemView {
       return "";
     }
   }
+
+  private resolveImageSource(target: string): string | null {
+    const normalizedTarget = target.trim();
+    if (normalizedTarget.length === 0) {
+      return null;
+    }
+
+    if (/^(https?:|data:|blob:)/i.test(normalizedTarget)) {
+      return normalizedTarget;
+    }
+
+    if (!this.file) {
+      return null;
+    }
+
+    const fromMetadata = this.app.metadataCache.getFirstLinkpathDest(
+      normalizedTarget,
+      this.file.path,
+    );
+    if (fromMetadata) {
+      return this.app.vault.getResourcePath(fromMetadata);
+    }
+
+    const resolvedPath = normalizedTarget.startsWith("/")
+      ? normalizePath(normalizedTarget.slice(1))
+      : normalizePath(
+          this.file.parent?.path
+            ? `${this.file.parent.path}/${normalizedTarget}`
+            : normalizedTarget,
+        );
+
+    const abstractFile = this.app.vault.getAbstractFileByPath(resolvedPath);
+    if (abstractFile instanceof TFile) {
+      return this.app.vault.getResourcePath(abstractFile);
+    }
+
+    return null;
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -2247,7 +2333,7 @@ function collectSubtreeNodeIds(node: MindMapNode): string[] {
 
 function canPreviewDrop(node: MindMapNode, position: MoveNodePosition): boolean {
   if (position === "child") {
-    return node.source.kind !== "linked-note";
+    return node.source.kind !== "linked-note" && node.source.kind !== "image-embed";
   }
 
   return node.source.kind === "heading" || node.source.kind === "overflow-list";

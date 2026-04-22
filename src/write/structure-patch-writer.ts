@@ -62,10 +62,10 @@ export function insertSiblingNode(
     );
   }
 
-  if (node.source.kind === "linked-note") {
+  if (node.source.kind === "linked-note" || node.source.kind === "image-embed") {
     throw new StructurePatchError(
       "NOT_EDITABLE",
-      "Linked-note items are derived from Markdown and cannot create sibling topics yet.",
+      "Derived attachment items are read-only in the mind map.",
     );
   }
 
@@ -115,10 +115,10 @@ export function insertChildNode(
   content: string,
   node: MindMapNode,
 ): StructurePatchResult {
-  if (node.source.kind === "linked-note") {
+  if (node.source.kind === "linked-note" || node.source.kind === "image-embed") {
     throw new StructurePatchError(
       "NOT_EDITABLE",
-      "Linked-note items are derived from Markdown and cannot create child topics yet.",
+      "Derived attachment items are read-only in the mind map.",
     );
   }
 
@@ -217,10 +217,10 @@ export function deleteNode(
     );
   }
 
-  if (node.source.kind === "linked-note") {
+  if (node.source.kind === "linked-note" || node.source.kind === "image-embed") {
     throw new StructurePatchError(
       "NOT_EDITABLE",
-      "Linked-note items are derived from Markdown and cannot be deleted yet.",
+      "Derived attachment items are read-only in the mind map.",
     );
   }
 
@@ -256,10 +256,10 @@ export function copyNodeSubtree(
     );
   }
 
-  if (node.source.kind === "linked-note") {
+  if (node.source.kind === "linked-note" || node.source.kind === "image-embed") {
     throw new StructurePatchError(
       "NOT_EDITABLE",
-      "Linked-note items cannot be copied as standalone topics yet.",
+      "Derived attachment items are read-only in the mind map.",
     );
   }
 
@@ -287,10 +287,10 @@ export function pasteNodeSubtreeAfter(
   targetNode: MindMapNode,
   copied: CopiedMindMapSubtree,
 ): StructurePatchResult {
-  if (targetNode.source.kind === "linked-note") {
+  if (targetNode.source.kind === "linked-note" || targetNode.source.kind === "image-embed") {
     throw new StructurePatchError(
       "NOT_EDITABLE",
-      "Paste after linked-note items is not supported yet.",
+      "Paste after derived attachment items is not supported yet.",
     );
   }
 
@@ -337,10 +337,10 @@ export function moveNode(
 ): StructurePatchResult {
   validateMovableNode(node, document);
 
-  if (targetNode.source.kind === "linked-note") {
+  if (targetNode.source.kind === "linked-note" || targetNode.source.kind === "image-embed") {
     throw new StructurePatchError(
       "NOT_EDITABLE",
-      "Linked-note items cannot be used as drag targets yet.",
+      "Derived attachment items cannot be used as drag targets yet.",
     );
   }
 
@@ -416,10 +416,10 @@ function validateMovableNode(node: MindMapNode, document: MindMapDocument): void
     );
   }
 
-  if (node.source.kind === "linked-note") {
+  if (node.source.kind === "linked-note" || node.source.kind === "image-embed") {
     throw new StructurePatchError(
       "NOT_EDITABLE",
-      "Linked-note items cannot be moved yet.",
+      "Derived attachment items cannot be moved yet.",
     );
   }
 

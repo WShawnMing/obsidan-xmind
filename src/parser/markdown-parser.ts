@@ -1,5 +1,7 @@
 import { tokenizeInlineText } from "./inline-tokenizer";
 import type {
+  MindMapImageEmbed,
+  MindMapInlineToken,
   MindMapDocument,
   MindMapNode,
   NodeSourceSpan,
@@ -9,6 +11,7 @@ import type {
 const HEADING_REGEX = /^(#{1,6})([ \t]+)(.*?)([ \t]+#+[ \t]*)?$/;
 const LIST_ITEM_REGEX = /^(\s*)([-+*]|\d+[.)])([ \t]+)(.*)$/;
 const PURE_WIKILINK_LINE_REGEX = /^(?:\[\[[^[\]]+?\]\](?:\s+|$))+$/;
+const MARKDOWN_IMAGE_REGEX = /!\[([^\]]*)\]\((<[^>]+>|[^)\s]+)(?:\s+"([^"]*)")?\)/g;
 
 interface HeadingStackEntry {
   depth: number;
@@ -130,6 +133,19 @@ export function parseMarkdownToMindMap(
         currentHeadingNode.children.push(...linkedNotes);
         continue;
       }
+
+      const imageEmbeds = parseImageEmbedLine(
+        file.path,
+        line,
+        lineIndex,
+        absoluteOffset,
+        currentHeadingNode.source.depth,
+        nodesById,
+      );
+      if (imageEmbeds.length > 0) {
+        currentHeadingNode.children.push(...imageEmbeds);
+        continue;
+      }
     }
 
     if (pendingOverflowParent) {
@@ -195,8 +211,12 @@ function createNode(
   source: MindMapNode["source"],
   nodesById: Map<string, MindMapNode>,
   explicitId?: string,
+  overrides?: Partial<Pick<MindMapNode, "label" | "tokens" | "links" | "image">>,
 ): MindMapNode {
-  const { tokens, links, label } = tokenizeInlineText(text);
+  const tokenized = tokenizeInlineText(text);
+  const tokens = overrides?.tokens ?? tokenized.tokens;
+  const links = overrides?.links ?? tokenized.links;
+  const label = overrides?.label ?? tokenized.label;
   const id =
     explicitId ??
     `${source.kind}:${filePath}:${source.span?.line ?? 0}:${source.span?.from ?? 0}`;
@@ -206,6 +226,7 @@ function createNode(
     label,
     tokens,
     links,
+    image: overrides?.image,
     children: [],
     collapsed: false,
     source,
@@ -344,6 +365,20 @@ function parseOverflowListBlock(
         );
         if (linkedNotes.length > 0) {
           deepestEntry.node.children.push(...linkedNotes);
+          nextIndex += 1;
+          continue;
+        }
+
+        const imageEmbeds = parseImageEmbedLine(
+          filePath,
+          line,
+          nextIndex,
+          absoluteOffset,
+          deepestEntry.depth,
+          nodesById,
+        );
+        if (imageEmbeds.length > 0) {
+          deepestEntry.node.children.push(...imageEmbeds);
         }
         nextIndex += 1;
         continue;
@@ -447,4 +482,99 @@ function parseLinkedNoteLine(
   }
 
   return nodes;
+}
+
+function parseImageEmbedLine(
+  filePath: string,
+  line: string,
+  lineIndex: number,
+  absoluteOffset: number,
+  parentDepth: number,
+  nodesById: Map<string, MindMapNode>,
+): MindMapNode[] {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) {
+    return [];
+  }
+
+  const nodes: MindMapNode[] = [];
+  const lineStartOffset = line.length - line.trimStart().length;
+  let cursor = 0;
+  let imageIndex = 0;
+
+  for (const match of trimmed.matchAll(MARKDOWN_IMAGE_REGEX)) {
+    const rawImage = match[0] ?? "";
+    const matchIndex = match.index ?? 0;
+    if (trimmed.slice(cursor, matchIndex).trim().length > 0) {
+      return [];
+    }
+
+    const image = parseMarkdownImage(rawImage, match);
+    const label = image.alt.trim().length > 0 ? image.alt.trim() : getImageFallbackLabel(image);
+    const from = absoluteOffset + lineStartOffset + matchIndex;
+    const to = from + rawImage.length;
+    const node = createNode(
+      filePath,
+      label,
+      {
+        kind: "image-embed",
+        depth: parentDepth + 1,
+        span: {
+          from,
+          to,
+          line: lineIndex + 1,
+          column: lineStartOffset + matchIndex,
+          depth: parentDepth + 1,
+          kind: "image-embed",
+        },
+      },
+      nodesById,
+      `image-embed:${filePath}:${lineIndex + 1}:${imageIndex}`,
+      {
+        label,
+        tokens: [
+          {
+            type: "text",
+            raw: label,
+            text: label,
+          } as MindMapInlineToken,
+        ],
+        links: [],
+        image,
+      },
+    );
+    nodes.push(node);
+    cursor = matchIndex + rawImage.length;
+    imageIndex += 1;
+  }
+
+  if (nodes.length === 0 || trimmed.slice(cursor).trim().length > 0) {
+    return [];
+  }
+
+  return nodes;
+}
+
+function parseMarkdownImage(raw: string, match: RegExpMatchArray): MindMapImageEmbed {
+  const alt = match[1] ?? "";
+  const rawTarget = match[2] ?? "";
+  const title = match[3]?.trim() || undefined;
+  const target =
+    rawTarget.startsWith("<") && rawTarget.endsWith(">")
+      ? rawTarget.slice(1, -1)
+      : rawTarget;
+
+  return {
+    raw,
+    alt,
+    target,
+    title,
+  };
+}
+
+function getImageFallbackLabel(image: MindMapImageEmbed): string {
+  const normalized = image.target.replace(/[#?].*$/, "");
+  const segments = normalized.split("/");
+  const basename = segments[segments.length - 1]?.trim();
+  return basename && basename.length > 0 ? basename : "Image";
 }

@@ -11,6 +11,8 @@ import type {
 const NODE_HEIGHT = 44;
 const MIN_WIDTH = 140;
 const MAX_WIDTH = 320;
+const IMAGE_NODE_WIDTH = 216;
+const IMAGE_NODE_HEIGHT = 164;
 const HORIZONTAL_GAP = 220;
 const VERTICAL_GAP = 28;
 const PADDING = 48;
@@ -37,10 +39,10 @@ export function layoutMindMap(
       });
     }
 
-    const width = estimateNodeWidth(node);
+    const size = estimateNodeSize(node);
     const centerY =
       childCenters.length === 0
-        ? leafCursor + NODE_HEIGHT / 2
+        ? leafCursor + size.height / 2
         : (childCenters[0]! + childCenters[childCenters.length - 1]!) / 2;
 
     const offset = layoutOffsets[node.id] ?? { x: 0, y: 0 };
@@ -48,14 +50,14 @@ export function layoutMindMap(
     nodes.set(node.id, {
       node,
       x: PADDING + depth * HORIZONTAL_GAP + offset.x,
-      y: centerY - NODE_HEIGHT / 2 + offset.y,
-      width,
-      height: NODE_HEIGHT,
+      y: centerY - size.height / 2 + offset.y,
+      width: size.width,
+      height: size.height,
       depth,
     });
 
     if (childCenters.length === 0) {
-      leafCursor += NODE_HEIGHT + VERTICAL_GAP;
+      leafCursor += size.height + VERTICAL_GAP;
     }
 
     return centerY;
@@ -133,7 +135,17 @@ function buildEdgePath(
   return `M ${startX} ${startY} L ${branchAnchorX} ${startY} C ${branchAnchorX + curve} ${startY}, ${endX - curve} ${endY}, ${endX} ${endY}`;
 }
 
-function estimateNodeWidth(node: MindMapNode): number {
+function estimateNodeSize(node: MindMapNode): { width: number; height: number } {
+  if (node.source.kind === "image-embed") {
+    return {
+      width: IMAGE_NODE_WIDTH,
+      height: IMAGE_NODE_HEIGHT,
+    };
+  }
+
   const length = node.label.length > 0 ? node.label.length : node.text.length;
-  return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, length * 8 + 56));
+  return {
+    width: Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, length * 8 + 56)),
+    height: NODE_HEIGHT,
+  };
 }

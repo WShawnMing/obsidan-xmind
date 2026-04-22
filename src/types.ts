@@ -1,4 +1,9 @@
-export type NodeKind = "virtual-root" | "heading" | "overflow-list" | "linked-note";
+export type NodeKind =
+  | "virtual-root"
+  | "heading"
+  | "overflow-list"
+  | "linked-note"
+  | "image-embed";
 export type MindMapBackgroundStyle = "plain" | "grid" | "dots" | "aurora";
 export type MindMapNodeShape = "pill" | "rounded" | "soft-square";
 export type MindMapConnectionStyle = "curved" | "angled" | "straight";
@@ -15,7 +20,7 @@ export interface NodeSourceSpan {
   line: number;
   column: number;
   depth: number;
-  kind: "heading" | "overflow-list" | "linked-note";
+  kind: "heading" | "overflow-list" | "linked-note" | "image-embed";
 }
 
 export interface MindMapNodeSource {
@@ -31,6 +36,13 @@ export interface MindMapWikiLink {
   alias?: string;
   subpath?: string;
   exists?: boolean;
+}
+
+export interface MindMapImageEmbed {
+  raw: string;
+  alt: string;
+  target: string;
+  title?: string;
 }
 
 export type MindMapInlineToken =
@@ -49,6 +61,7 @@ export interface MindMapNode {
   label: string;
   tokens: MindMapInlineToken[];
   links: MindMapWikiLink[];
+  image?: MindMapImageEmbed;
   children: MindMapNode[];
   collapsed: boolean;
   source: MindMapNodeSource;

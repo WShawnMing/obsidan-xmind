@@ -135,6 +135,54 @@ describe("parseMarkdownToMindMap", () => {
     expect(linked?.source.span?.kind).toBe("linked-note");
   });
 
+  it("creates image-embed children from pure markdown image lines under headings", () => {
+    const doc = parseMarkdownToMindMap(
+      file,
+      [
+        "# Root",
+        "## Section",
+        "![Preview](assets/example.png)",
+      ].join("\n"),
+    );
+
+    const imageNode = doc.root.children[0]?.children[0];
+    expect(imageNode?.source.kind).toBe("image-embed");
+    expect(imageNode?.label).toBe("Preview");
+    expect(imageNode?.image?.target).toBe("assets/example.png");
+  });
+
+  it("creates image-embed children under overflow list items", () => {
+    const doc = parseMarkdownToMindMap(
+      file,
+      [
+        "# Root",
+        "###### Level 6",
+        "- Level 7",
+        "  ![Chart](assets/chart.png)",
+      ].join("\n"),
+    );
+
+    const imageNode = doc.root.children[0]?.children[0]?.children[0];
+    expect(imageNode?.source.kind).toBe("image-embed");
+    expect(imageNode?.label).toBe("Chart");
+    expect(imageNode?.image?.target).toBe("assets/chart.png");
+  });
+
+  it("falls back to the image filename when alt text is empty", () => {
+    const doc = parseMarkdownToMindMap(
+      file,
+      [
+        "# Root",
+        "## Section",
+        "![](assets/screens/example.png)",
+      ].join("\n"),
+    );
+
+    const imageNode = doc.root.children[0]?.children[0];
+    expect(imageNode?.label).toBe("example.png");
+    expect(imageNode?.source.span?.kind).toBe("image-embed");
+  });
+
   it("ignores ordinary lists when they are not overflow nodes", () => {
     const doc = parseMarkdownToMindMap(
       file,

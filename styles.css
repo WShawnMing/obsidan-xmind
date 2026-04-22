@@ -227,6 +227,17 @@
   box-shadow: none;
 }
 
+.oxm-node.is-image-embed {
+  padding: 8px;
+  border-radius: 18px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--background-primary) 94%, white 6%),
+      color-mix(in srgb, var(--background-secondary) 96%, white 4%)
+    );
+}
+
 .oxm-node.is-editing {
   border-color: color-mix(in srgb, var(--text-accent) 58%, white 8%);
   box-shadow:
@@ -347,6 +358,68 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.oxm-node.is-image-embed .oxm-node-content {
+  width: 100%;
+  height: 100%;
+}
+
+.oxm-image-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+}
+
+.oxm-image-media {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--background-secondary) 92%, black 8%);
+}
+
+.oxm-image-media.is-missing {
+  background:
+    repeating-linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--background-modifier-border) 40%, transparent) 0 10px,
+      transparent 10px 20px
+    ),
+    color-mix(in srgb, var(--background-secondary) 94%, white 6%);
+}
+
+.oxm-image-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+
+.oxm-image-placeholder {
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.oxm-image-caption {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 600;
+  color: var(--text-normal);
 }
 
 .oxm-token-link {
