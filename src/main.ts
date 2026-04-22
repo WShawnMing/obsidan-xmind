@@ -96,9 +96,19 @@ export default class ObsidianXMindPlugin extends Plugin {
     this.addCommand({
       id: "mind-map-delete-selected-topic",
       name: "Mind map: Delete selected topic",
+      hotkeys: [
+        {
+          modifiers: [],
+          key: "Backspace",
+        },
+        {
+          modifiers: [],
+          key: "Delete",
+        },
+      ],
       checkCallback: (checking) => {
         const view = this.getActiveMindMapView();
-        if (!view) {
+        if (!view || !view.canDeleteSelectedNode()) {
           return false;
         }
 

@@ -317,6 +317,23 @@ export class MindMapView extends ItemView {
     return this.plugin.hasMindMapClipboard();
   }
 
+  canDeleteSelectedNode(): boolean {
+    if (!this.file || !this.parsed || this.editingNodeId || !this.selectedNodeId) {
+      return false;
+    }
+
+    const node = this.parsed.nodesById.get(this.selectedNodeId);
+    if (!node) {
+      return false;
+    }
+
+    return (
+      node.id !== this.parsed.root.id &&
+      node.source.kind !== "virtual-root" &&
+      node.source.kind !== "linked-note"
+    );
+  }
+
   async undoLastAction(): Promise<void> {
     if (!this.file) {
       return;
@@ -1148,12 +1165,6 @@ export class MindMapView extends ItemView {
     if (event.key === "Tab" && !event.shiftKey) {
       event.preventDefault();
       void this.addChildNode();
-      return;
-    }
-
-    if (event.key === "Delete" || event.key === "Backspace") {
-      event.preventDefault();
-      void this.deleteSelectedNode();
       return;
     }
 
