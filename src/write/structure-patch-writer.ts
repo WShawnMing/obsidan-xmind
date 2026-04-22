@@ -23,6 +23,13 @@ export interface StructurePatchResult {
 
 export type MoveNodePosition = "before" | "after" | "child";
 
+export interface CopiedMindMapSubtree {
+  rootKind: "heading" | "overflow-list";
+  rootDepth: number;
+  text: string;
+  lines: string[];
+}
+
 interface LineState {
   lines: string[];
   documentEndIndex: number;
@@ -236,6 +243,89 @@ export function deleteNode(
 
   state.lines.splice(startIndex, endIndex - startIndex);
   return state.lines.join("\n");
+}
+
+export function copyNodeSubtree(
+  content: string,
+  node: MindMapNode,
+): CopiedMindMapSubtree {
+  if (node.source.kind === "virtual-root") {
+    throw new StructurePatchError(
+      "INVALID_TARGET",
+      "The canvas root cannot be copied as a standalone topic.",
+    );
+  }
+
+  if (node.source.kind === "linked-note") {
+    throw new StructurePatchError(
+      "NOT_EDITABLE",
+      "Linked-note items cannot be copied as standalone topics yet.",
+    );
+  }
+
+  const state = buildLineState(content);
+  const startIndex = getNodeLineIndex(node);
+  const endIndex = getSubtreeEndIndex(state.lines, node);
+
+  if (node.source.kind === "heading") {
+    validateHeadingLine(state.lines, node);
+  } else {
+    validateOverflowListLine(state.lines, node);
+  }
+
+  return {
+    rootKind: node.source.kind,
+    rootDepth: node.source.depth,
+    text: node.text,
+    lines: state.lines.slice(startIndex, endIndex),
+  };
+}
+
+export function pasteNodeSubtreeAfter(
+  content: string,
+  document: MindMapDocument,
+  targetNode: MindMapNode,
+  copied: CopiedMindMapSubtree,
+): StructurePatchResult {
+  if (targetNode.source.kind === "linked-note") {
+    throw new StructurePatchError(
+      "NOT_EDITABLE",
+      "Paste after linked-note items is not supported yet.",
+    );
+  }
+
+  const state = buildLineState(content);
+  const targetRoot =
+    targetNode.source.kind === "virtual-root"
+      ? getMoveTargetSpec(state.lines, targetNode, "child")
+      : getMoveTargetSpec(state.lines, targetNode, "after");
+
+  const syntheticNode: MindMapNode = {
+    id: `clipboard:${copied.rootKind}:${copied.rootDepth}:${copied.text}`,
+    text: copied.text,
+    label: copied.text,
+    tokens: [],
+    links: [],
+    children: [],
+    collapsed: false,
+    source: {
+      kind: copied.rootKind,
+      depth: copied.rootDepth,
+    },
+  };
+
+  const transformedBlock = rewriteMovedBlock(copied.lines, syntheticNode, targetRoot);
+  state.lines.splice(targetRoot.insertionIndex, 0, ...transformedBlock);
+
+  return {
+    content: state.lines.join("\n"),
+    insertedNode: {
+      kind: targetRoot.kind,
+      depth: targetRoot.depth,
+      line: targetRoot.insertionIndex + 1,
+      text: copied.text,
+    },
+  };
 }
 
 export function moveNode(

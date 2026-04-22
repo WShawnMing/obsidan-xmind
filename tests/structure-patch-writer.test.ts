@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { parseMarkdownToMindMap } from "../src/parser/markdown-parser";
 import {
+  copyNodeSubtree,
   StructurePatchError,
   deleteNode,
   insertChildNode,
   insertSiblingNode,
   moveNode,
+  pasteNodeSubtreeAfter,
 } from "../src/write/structure-patch-writer";
 
 const file = {
@@ -225,6 +227,98 @@ describe("structure-patch-writer", () => {
     expect(patch.content).toBe([
       "# Root",
       "###### Level 6",
+      "- Beta",
+      "- Alpha",
+      "  - Child",
+    ].join("\n"));
+  });
+
+  it("copies a heading subtree and pastes it after another sibling", () => {
+    const source = [
+      "# Root",
+      "## Alpha",
+      "### Child",
+      "[[Article]]",
+      "## Beta",
+    ].join("\n");
+    const doc = parseMarkdownToMindMap(file, source);
+    const copied = copyNodeSubtree(source, doc.root.children[0]!);
+
+    const patch = pasteNodeSubtreeAfter(
+      source,
+      doc,
+      doc.root.children[1]!,
+      copied,
+    );
+
+    expect(patch.content).toBe([
+      "# Root",
+      "## Alpha",
+      "### Child",
+      "[[Article]]",
+      "## Beta",
+      "## Alpha",
+      "### Child",
+      "[[Article]]",
+    ].join("\n"));
+    expect(patch.insertedNode).toEqual({
+      kind: "heading",
+      depth: 2,
+      line: 6,
+      text: "Alpha",
+    });
+  });
+
+  it("pastes a heading subtree under H6 as overflow items", () => {
+    const source = [
+      "# Root",
+      "###### Level 6",
+      "## Alpha",
+      "### Child",
+    ].join("\n");
+    const doc = parseMarkdownToMindMap(file, source);
+    const copied = copyNodeSubtree(source, doc.root.children[1]!);
+
+    const patch = pasteNodeSubtreeAfter(
+      source,
+      doc,
+      doc.root.children[0]!,
+      copied,
+    );
+
+    expect(patch.content).toBe([
+      "# Root",
+      "###### Level 6",
+      "###### Alpha",
+      "- Child",
+      "## Alpha",
+      "### Child",
+    ].join("\n"));
+  });
+
+  it("copies an overflow subtree and pastes it after a sibling overflow node", () => {
+    const source = [
+      "# Root",
+      "###### Level 6",
+      "- Alpha",
+      "  - Child",
+      "- Beta",
+    ].join("\n");
+    const doc = parseMarkdownToMindMap(file, source);
+    const copied = copyNodeSubtree(source, doc.root.children[0]!.children[0]!);
+
+    const patch = pasteNodeSubtreeAfter(
+      source,
+      doc,
+      doc.root.children[0]!.children[1]!,
+      copied,
+    );
+
+    expect(patch.content).toBe([
+      "# Root",
+      "###### Level 6",
+      "- Alpha",
+      "  - Child",
       "- Beta",
       "- Alpha",
       "  - Child",

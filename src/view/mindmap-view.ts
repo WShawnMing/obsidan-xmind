@@ -27,13 +27,16 @@ import type {
   PositionedMindMapNode,
 } from "../types";
 import {
+  copyNodeSubtree,
   StructurePatchError,
+  type CopiedMindMapSubtree,
   type InsertedNodeSelection,
   deleteNode,
   insertChildNode,
   insertSiblingNode,
   moveNode,
   type MoveNodePosition,
+  pasteNodeSubtreeAfter,
 } from "../write/structure-patch-writer";
 import { TitlePatchError, patchNodeTitle } from "../write/title-patch-writer";
 import type ObsidianXMindPlugin from "../main";
@@ -109,6 +112,7 @@ export class MindMapView extends ItemView {
   private nodeDragState: NodeDragState | null = null;
   private dropPreview: DropPreviewState | null = null;
   private pendingEditOnClickNodeId: string | null = null;
+  private editingSeedText: string | null = null;
   private suppressNextNodeClick = false;
   private isCommittingEdit = false;
   private isApplyingLocalChange = false;
@@ -286,6 +290,28 @@ export class MindMapView extends ItemView {
     );
   }
 
+  canCopySelectedNode(): boolean {
+    if (!this.file || !this.parsed || this.editingNodeId || !this.selectedNodeId) {
+      return false;
+    }
+
+    const node = this.parsed.nodesById.get(this.selectedNodeId);
+    return !!node && (node.source.kind === "heading" || node.source.kind === "overflow-list");
+  }
+
+  canPasteAfterSelectedNode(): boolean {
+    if (!this.file || !this.parsed || this.editingNodeId || !this.selectedNodeId) {
+      return false;
+    }
+
+    const node = this.parsed.nodesById.get(this.selectedNodeId);
+    if (!node || node.source.kind === "linked-note") {
+      return false;
+    }
+
+    return this.plugin.hasMindMapClipboard();
+  }
+
   async undoLastAction(): Promise<void> {
     if (!this.file) {
       return;
@@ -336,6 +362,91 @@ export class MindMapView extends ItemView {
       new Notice("Failed to undo the last mind map change.");
     } finally {
       this.isUndoing = false;
+    }
+  }
+
+  async copySelectedNode(): Promise<void> {
+    if (!this.file || !this.parsed || !this.selectedNodeId) {
+      return;
+    }
+
+    const node = this.parsed.nodesById.get(this.selectedNodeId);
+    if (!node) {
+      return;
+    }
+
+    try {
+      const content = await this.app.vault.read(this.file);
+      const copied = copyNodeSubtree(content, node);
+      this.plugin.setMindMapClipboard(copied);
+      void this.writeClipboardPreview(copied);
+      new Notice(`Copied “${node.label || node.text}”.`);
+    } catch (error) {
+      if (error instanceof StructurePatchError) {
+        new Notice(error.message);
+        return;
+      }
+
+      new Notice("Failed to copy the selected topic.");
+    }
+  }
+
+  async pasteAfterSelectedNode(): Promise<void> {
+    if (!this.file || !this.parsed || !this.selectedNodeId) {
+      return;
+    }
+
+    const targetNode = this.parsed.nodesById.get(this.selectedNodeId);
+    const copied = this.plugin.getMindMapClipboard();
+    if (!targetNode || !copied) {
+      return;
+    }
+
+    this.isApplyingLocalChange = true;
+
+    try {
+      const content = await this.app.vault.read(this.file);
+      const patch = pasteNodeSubtreeAfter(content, this.parsed, targetNode, copied);
+      this.pendingSelection = patch.insertedNode
+        ? {
+            source: {
+              type: "inserted",
+              selection: patch.insertedNode,
+              startEditing: false,
+            },
+          }
+        : null;
+      if (patch.content !== content) {
+        const beforeLayout = cloneLayoutOffsets(this.nodeLayoutOffsets);
+        await this.app.vault.modify(this.file, patch.content);
+        this.nodeLayoutOffsets = {};
+        await this.plugin.setLayoutForFile(this.file.path, {});
+        this.pushUndoEntry({
+          filePath: this.file.path,
+          label:
+            targetNode.source.kind === "virtual-root"
+              ? `Pasted “${copied.text}” into root`
+              : `Pasted “${copied.text}” after “${targetNode.label || targetNode.text}”`,
+          beforeContent: content,
+          afterContent: patch.content,
+          beforeLayout,
+          afterLayout: {},
+          restoreSelectionNodeId: targetNode.id,
+        });
+      }
+      await this.refresh();
+    } catch (error) {
+      if (error instanceof StructurePatchError) {
+        new Notice(error.message);
+        if (error.code === "STALE_SOURCE") {
+          await this.refresh();
+        }
+        return;
+      }
+
+      new Notice("Failed to paste the copied topic.");
+    } finally {
+      this.isApplyingLocalChange = false;
     }
   }
 
@@ -508,6 +619,7 @@ export class MindMapView extends ItemView {
       { passive: false },
     );
     this.contentEl.addEventListener("keydown", (event) => this.onKeyDown(event));
+    this.contentEl.addEventListener("compositionstart", () => this.onCompositionStart());
 
     this.contentEl.append(toolbar, surface, undoBar);
     this.elements = {
@@ -628,10 +740,11 @@ export class MindMapView extends ItemView {
     contentEl.className = "oxm-node-content";
 
     if (isEditing && editable) {
+      const initialValue = this.editingSeedText ?? node.text;
       const input = document.createElement("input");
       input.className = "oxm-node-input";
       input.type = "text";
-      input.value = node.text;
+      input.value = initialValue;
       input.addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
           event.preventDefault();
@@ -654,6 +767,7 @@ export class MindMapView extends ItemView {
         const end = input.value.length;
         input.setSelectionRange(end, end);
       });
+      this.editingSeedText = null;
     } else {
       for (const token of node.tokens) {
         contentEl.append(this.renderToken(token));
@@ -747,7 +861,7 @@ export class MindMapView extends ItemView {
     return button;
   }
 
-  private startEditing(nodeId: string): void {
+  private startEditing(nodeId: string, seedText: string | null = null): void {
     if (!this.parsed) {
       return;
     }
@@ -762,6 +876,7 @@ export class MindMapView extends ItemView {
 
     this.selectedNodeId = nodeId;
     this.editingNodeId = nodeId;
+    this.editingSeedText = seedText;
     this.render();
   }
 
@@ -973,6 +1088,7 @@ export class MindMapView extends ItemView {
       this.selectedNodeId = this.editingNodeId;
     }
     this.editingNodeId = null;
+    this.editingSeedText = null;
     this.editorInput = null;
   }
 
@@ -981,11 +1097,29 @@ export class MindMapView extends ItemView {
       return;
     }
 
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c") {
+      event.preventDefault();
+      void this.copySelectedNode();
+      return;
+    }
+
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") {
+      event.preventDefault();
+      void this.pasteAfterSelectedNode();
+      return;
+    }
+
     if ((event.metaKey || event.ctrlKey || event.altKey) && event.key !== "Backspace") {
       return;
     }
 
     if (!this.selectedNodeId) {
+      return;
+    }
+
+    if (shouldStartTypingEdit(event)) {
+      event.preventDefault();
+      this.startEditing(this.selectedNodeId, event.key);
       return;
     }
 
@@ -1011,6 +1145,14 @@ export class MindMapView extends ItemView {
       event.preventDefault();
       this.startEditing(this.selectedNodeId);
     }
+  }
+
+  private onCompositionStart(): void {
+    if (!this.selectedNodeId || this.editingNodeId) {
+      return;
+    }
+
+    this.startEditing(this.selectedNodeId, "");
   }
 
   private onPointerDown(event: PointerEvent): void {
@@ -1442,6 +1584,18 @@ export class MindMapView extends ItemView {
     this.undoBarDismissed = false;
     this.renderUndoBar();
   }
+
+  private async writeClipboardPreview(copied: CopiedMindMapSubtree): Promise<void> {
+    if (!navigator.clipboard?.writeText) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(copied.lines.join("\n"));
+    } catch {
+      // Ignore clipboard permission failures; the in-plugin clipboard remains available.
+    }
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -1513,6 +1667,18 @@ function buildPreviewCurve(
   const curve = Math.max(26, delta * 0.34);
   const direction = endX >= startX ? 1 : -1;
   return `M ${startX} ${startY} C ${startX + curve * direction} ${startY}, ${endX - curve * direction} ${endY}, ${endX} ${endY}`;
+}
+
+function shouldStartTypingEdit(event: KeyboardEvent): boolean {
+  if (event.metaKey || event.ctrlKey || event.altKey) {
+    return false;
+  }
+
+  if (event.key === " " || event.key.length === 1) {
+    return true;
+  }
+
+  return false;
 }
 
 function cloneLayoutOffsets(

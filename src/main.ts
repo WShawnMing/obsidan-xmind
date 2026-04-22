@@ -11,10 +11,12 @@ import type {
   PluginData,
 } from "./types";
 import { MindMapView } from "./view/mindmap-view";
+import type { CopiedMindMapSubtree } from "./write/structure-patch-writer";
 
 export default class ObsidianXMindPlugin extends Plugin {
   private layoutByFile: Record<string, Record<string, NodeLayoutOffset>> = {};
   private appearanceSettings: AppearanceSettings = { ...DEFAULT_APPEARANCE_SETTINGS };
+  private mindMapClipboard: CopiedMindMapSubtree | null = null;
 
   async onload(): Promise<void> {
     const data = (await this.loadData()) as PluginData | null;
@@ -145,6 +147,38 @@ export default class ObsidianXMindPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "mind-map-copy-selected-topic",
+      name: "Mind map: Copy selected topic",
+      checkCallback: (checking) => {
+        const view = this.getActiveMindMapView();
+        if (!view || !view.canCopySelectedNode()) {
+          return false;
+        }
+
+        if (!checking) {
+          void view.copySelectedNode();
+        }
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: "mind-map-paste-after-selected-topic",
+      name: "Mind map: Paste after selected topic",
+      checkCallback: (checking) => {
+        const view = this.getActiveMindMapView();
+        if (!view || !view.canPasteAfterSelectedNode()) {
+          return false;
+        }
+
+        if (!checking) {
+          void view.pasteAfterSelectedNode();
+        }
+        return true;
+      },
+    });
+
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
         if (file instanceof TFile) {
@@ -195,6 +229,28 @@ export default class ObsidianXMindPlugin extends Plugin {
 
   getAppearanceSettings(): AppearanceSettings {
     return { ...this.appearanceSettings };
+  }
+
+  setMindMapClipboard(copied: CopiedMindMapSubtree | null): void {
+    this.mindMapClipboard = copied
+      ? {
+          ...copied,
+          lines: [...copied.lines],
+        }
+      : null;
+  }
+
+  getMindMapClipboard(): CopiedMindMapSubtree | null {
+    return this.mindMapClipboard
+      ? {
+          ...this.mindMapClipboard,
+          lines: [...this.mindMapClipboard.lines],
+        }
+      : null;
+  }
+
+  hasMindMapClipboard(): boolean {
+    return !!this.mindMapClipboard;
   }
 
   async setLayoutForFile(
