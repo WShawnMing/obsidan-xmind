@@ -108,6 +108,7 @@ export class MindMapView extends ItemView {
   private lastRenderedLayout: MindMapLayout | null = null;
   private nodeDragState: NodeDragState | null = null;
   private dropPreview: DropPreviewState | null = null;
+  private pendingEditOnClickNodeId: string | null = null;
   private suppressNextNodeClick = false;
   private isCommittingEdit = false;
   private isApplyingLocalChange = false;
@@ -666,6 +667,7 @@ export class MindMapView extends ItemView {
     nodeEl.addEventListener("click", (event) => {
       if (this.suppressNextNodeClick) {
         this.suppressNextNodeClick = false;
+        this.pendingEditOnClickNodeId = null;
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -683,16 +685,15 @@ export class MindMapView extends ItemView {
         return;
       }
 
-      if (this.selectedNodeId === node.id && editable) {
+      const shouldStartEditing = this.pendingEditOnClickNodeId === node.id && editable;
+      this.pendingEditOnClickNodeId = null;
+      if (shouldStartEditing) {
         this.startEditing(node.id);
         return;
       }
-
-      this.selectedNodeId = node.id;
-      this.contentEl.focus();
-      this.render();
     });
     nodeEl.addEventListener("dblclick", () => {
+      this.pendingEditOnClickNodeId = null;
       this.startEditing(node.id);
     });
     nodeEl.addEventListener("contextmenu", (event) => {
@@ -875,6 +876,14 @@ export class MindMapView extends ItemView {
       return;
     }
 
+    const wasSelected = this.selectedNodeId === nodeId;
+    this.pendingEditOnClickNodeId = wasSelected ? nodeId : null;
+    if (!wasSelected) {
+      this.selectedNodeId = nodeId;
+      this.contentEl.focus();
+      this.render();
+    }
+
     const positioned = this.lastRenderedLayout.nodes.get(nodeId);
     if (!positioned) {
       return;
@@ -1009,6 +1018,7 @@ export class MindMapView extends ItemView {
       return;
     }
 
+    this.pendingEditOnClickNodeId = null;
     this.panState = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -1069,6 +1079,7 @@ export class MindMapView extends ItemView {
       const beforeLayout = cloneLayoutOffsets(this.nodeDragState.beforeLayout);
       this.nodeDragState = null;
       this.dropPreview = null;
+      this.pendingEditOnClickNodeId = null;
       if (this.elements?.surface.hasPointerCapture(event.pointerId)) {
         this.elements.surface.releasePointerCapture(event.pointerId);
       }
