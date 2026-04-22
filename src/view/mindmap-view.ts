@@ -26,20 +26,25 @@ import type {
   MindMapViewState,
   NodeLayoutOffset,
   PositionedMindMapNode,
+  SourceDocumentRef,
 } from "../types";
 import {
-  copyNodeSubtree,
   StructurePatchError,
   type CopiedMindMapSubtree,
   type InsertedNodeSelection,
-  deleteNode,
-  insertChildNode,
-  insertSiblingNode,
-  moveNode,
   type MoveNodePosition,
-  pasteNodeSubtreeAfter,
 } from "../write/structure-patch-writer";
-import { TitlePatchError, patchNodeTitle } from "../write/title-patch-writer";
+import {
+  copyNodeSubtreeFromMarkdown,
+  deleteNodeInMarkdown,
+  insertChildNodeInMarkdown,
+  insertSiblingNodeInMarkdown,
+  moveNodeInMarkdown,
+  type MarkdownTextOperationResult,
+  pasteNodeSubtreeAfterInMarkdown,
+  renameNodeInMarkdown,
+} from "../write/markdown-text-operation";
+import { TitlePatchError } from "../write/title-patch-writer";
 import type ObsidianXMindPlugin from "../main";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -177,6 +182,17 @@ export class MindMapView extends ItemView {
 
   getCurrentFilePath(): string | null {
     return this.file?.path ?? null;
+  }
+
+  private getSourceDocumentRef(): SourceDocumentRef | null {
+    if (!this.file) {
+      return null;
+    }
+
+    return {
+      path: this.file.path,
+      basename: this.file.basename,
+    };
   }
 
   async handleFileModified(file: TFile): Promise<void> {
@@ -484,21 +500,21 @@ export class MindMapView extends ItemView {
   }
 
   async copySelectedNode(): Promise<void> {
-    if (!this.file || !this.parsed || !this.selectedNodeId) {
-      return;
-    }
-
-    const node = this.parsed.nodesById.get(this.selectedNodeId);
-    if (!node) {
+    if (!this.file || !this.selectedNodeId) {
       return;
     }
 
     try {
+      const sourceRef = this.getSourceDocumentRef();
+      if (!sourceRef) {
+        return;
+      }
+
       const content = await this.app.vault.read(this.file);
-      const copied = copyNodeSubtree(content, node);
+      const copied = copyNodeSubtreeFromMarkdown(sourceRef, content, this.selectedNodeId);
       this.plugin.setMindMapClipboard(copied);
       void this.writeClipboardPreview(copied);
-      new Notice(`Copied “${node.label || node.text}”.`);
+      new Notice(`Copied “${copied.text}”.`);
     } catch (error) {
       if (error instanceof StructurePatchError) {
         new Notice(error.message);
@@ -510,50 +526,20 @@ export class MindMapView extends ItemView {
   }
 
   async pasteAfterSelectedNode(): Promise<void> {
-    if (!this.file || !this.parsed || !this.selectedNodeId) {
+    if (!this.file || !this.selectedNodeId) {
       return;
     }
 
-    const targetNode = this.parsed.nodesById.get(this.selectedNodeId);
     const copied = this.plugin.getMindMapClipboard();
-    if (!targetNode || !copied) {
+    if (!copied) {
       return;
     }
-
-    this.isApplyingLocalChange = true;
 
     try {
-      const content = await this.app.vault.read(this.file);
-      const patch = pasteNodeSubtreeAfter(content, this.parsed, targetNode, copied);
-      this.pendingSelection = patch.insertedNode
-        ? {
-            source: {
-              type: "inserted",
-              selection: patch.insertedNode,
-              startEditing: false,
-            },
-          }
-        : null;
-      if (patch.content !== content) {
-        const beforeLayout = cloneLayoutOffsets(this.nodeLayoutOffsets);
-        await this.app.vault.modify(this.file, patch.content);
-        this.nodeLayoutOffsets = {};
-        await this.plugin.setLayoutForFile(this.file.path, {});
-        this.pushUndoEntry({
-          filePath: this.file.path,
-          label:
-            targetNode.source.kind === "virtual-root"
-              ? `Pasted “${copied.text}” into root`
-              : `Pasted “${copied.text}” after “${targetNode.label || targetNode.text}”`,
-          showBanner: false,
-          beforeContent: content,
-          afterContent: patch.content,
-          beforeLayout,
-          afterLayout: {},
-          restoreSelectionNodeId: targetNode.id,
-        });
-      }
-      await this.refresh();
+      const targetNodeId = this.selectedNodeId;
+      await this.applyMarkdownTextOperation((sourceRef, content) =>
+        pasteNodeSubtreeAfterInMarkdown(sourceRef, content, targetNodeId, copied),
+      );
     } catch (error) {
       if (error instanceof StructurePatchError) {
         new Notice(error.message);
@@ -564,40 +550,53 @@ export class MindMapView extends ItemView {
       }
 
       new Notice("Failed to paste the copied topic.");
-    } finally {
-      this.isApplyingLocalChange = false;
     }
   }
 
   async addSiblingNode(): Promise<void> {
-    if (!this.file || !this.parsed || !this.selectedNodeId) {
+    if (!this.file || !this.selectedNodeId) {
       return;
     }
+    const nodeId = this.selectedNodeId;
 
-    const node = this.parsed.nodesById.get(this.selectedNodeId);
-    if (!node) {
-      return;
+    try {
+      await this.applyMarkdownTextOperation((sourceRef, content) =>
+        insertSiblingNodeInMarkdown(sourceRef, content, nodeId),
+      );
+    } catch (error) {
+      if (error instanceof StructurePatchError) {
+        new Notice(error.message);
+        if (error.code === "STALE_SOURCE") {
+          await this.refresh();
+        }
+        return;
+      }
+
+      new Notice("Failed to update the note structure.");
     }
-
-    if (this.parsed.root.id === node.id) {
-      new Notice("The root topic only supports child topics.");
-      return;
-    }
-
-    await this.applyStructureEdit(insertSiblingNode, node);
   }
 
   async addChildNode(): Promise<void> {
-    if (!this.file || !this.parsed || !this.selectedNodeId) {
+    if (!this.file || !this.selectedNodeId) {
       return;
     }
+    const nodeId = this.selectedNodeId;
 
-    const node = this.parsed.nodesById.get(this.selectedNodeId);
-    if (!node) {
-      return;
+    try {
+      await this.applyMarkdownTextOperation((sourceRef, content) =>
+        insertChildNodeInMarkdown(sourceRef, content, nodeId),
+      );
+    } catch (error) {
+      if (error instanceof StructurePatchError) {
+        new Notice(error.message);
+        if (error.code === "STALE_SOURCE") {
+          await this.refresh();
+        }
+        return;
+      }
+
+      new Notice("Failed to update the note structure.");
     }
-
-    await this.applyStructureEdit(insertChildNode, node);
   }
 
   async deleteSelectedNode(): Promise<void> {
@@ -620,36 +619,11 @@ export class MindMapView extends ItemView {
       }
     }
 
-    this.isApplyingLocalChange = true;
-
     try {
-      const content = await this.app.vault.read(this.file);
-      const nextContent = deleteNode(content, this.parsed, node);
-      this.pendingSelection = parent
-        ? {
-            source: {
-              type: "node-id",
-              nodeId: parent.id,
-            },
-          }
-        : null;
-      if (nextContent !== content) {
-        const beforeLayout = cloneLayoutOffsets(this.nodeLayoutOffsets);
-        await this.app.vault.modify(this.file, nextContent);
-        this.nodeLayoutOffsets = {};
-        await this.plugin.setLayoutForFile(this.file.path, {});
-        this.pushUndoEntry({
-          filePath: this.file.path,
-          label: `Deleted “${node.label || node.text}”`,
-          showBanner: true,
-          beforeContent: content,
-          afterContent: nextContent,
-          beforeLayout,
-          afterLayout: {},
-          restoreSelectionNodeId: node.id,
-        });
-      }
-      await this.refresh();
+      const nodeId = node.id;
+      await this.applyMarkdownTextOperation((sourceRef, content) =>
+        deleteNodeInMarkdown(sourceRef, content, nodeId),
+      );
     } catch (error) {
       if (error instanceof StructurePatchError) {
         new Notice(error.message);
@@ -660,8 +634,6 @@ export class MindMapView extends ItemView {
       }
 
       new Notice("Failed to delete the selected topic.");
-    } finally {
-      this.isApplyingLocalChange = false;
     }
   }
 
@@ -1164,34 +1136,14 @@ export class MindMapView extends ItemView {
     }
 
     this.isCommittingEdit = true;
-    this.isApplyingLocalChange = true;
     const nextTitle = this.editorInput.value;
-    const node = this.parsed.nodesById.get(this.editingNodeId);
+    const editingNodeId = this.editingNodeId;
 
     try {
-      if (!node) {
-        this.endEditing(false);
-        this.render();
-        return;
-      }
-
-      const content = await this.app.vault.read(this.file);
-      const nextContent = patchNodeTitle(content, node, nextTitle);
       this.endEditing(false);
-      if (nextContent !== content) {
-        await this.app.vault.modify(this.file, nextContent);
-        this.pushUndoEntry({
-          filePath: this.file.path,
-          label: `Renamed “${node.label || node.text}”`,
-          showBanner: false,
-          beforeContent: content,
-          afterContent: nextContent,
-          beforeLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
-          afterLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
-          restoreSelectionNodeId: node.id,
-        });
-      }
-      await this.refresh();
+      await this.applyMarkdownTextOperation((sourceRef, content) =>
+        renameNodeInMarkdown(sourceRef, content, editingNodeId, nextTitle),
+      );
     } catch (error) {
       this.endEditing(false);
       if (error instanceof TitlePatchError) {
@@ -1207,7 +1159,6 @@ export class MindMapView extends ItemView {
         this.render();
       }
     } finally {
-      this.isApplyingLocalChange = false;
       this.isCommittingEdit = false;
     }
   }
@@ -1501,11 +1452,18 @@ export class MindMapView extends ItemView {
     }
   }
 
-  private async applyStructureEdit(
-    patchFn: typeof insertSiblingNode | typeof insertChildNode,
-    node: MindMapNode,
+  private async applyMarkdownTextOperation(
+    buildOperation: (
+      sourceRef: SourceDocumentRef,
+      content: string,
+    ) => MarkdownTextOperationResult,
   ): Promise<void> {
     if (!this.file) {
+      return;
+    }
+
+    const sourceRef = this.getSourceDocumentRef();
+    if (!sourceRef) {
       return;
     }
 
@@ -1513,46 +1471,39 @@ export class MindMapView extends ItemView {
 
     try {
       const content = await this.app.vault.read(this.file);
-      const patch = patchFn(content, node);
-      this.pendingSelection = patch.insertedNode
+      const operation = buildOperation(sourceRef, content);
+      this.pendingSelection = operation.nextSelection
         ? {
-            source: {
-              type: "inserted",
-              selection: patch.insertedNode,
-              startEditing: true,
-            },
+            source: operation.nextSelection,
           }
         : null;
-      if (patch.content !== content) {
-        await this.app.vault.modify(this.file, patch.content);
+
+      if (operation.content !== content) {
         const beforeLayout = cloneLayoutOffsets(this.nodeLayoutOffsets);
-        this.nodeLayoutOffsets = {};
-        await this.plugin.setLayoutForFile(this.file.path, {});
+        const afterLayout = operation.preserveLayout
+          ? cloneLayoutOffsets(this.nodeLayoutOffsets)
+          : {};
+
+        await this.app.vault.modify(this.file, operation.content);
+
+        if (!operation.preserveLayout) {
+          this.nodeLayoutOffsets = {};
+          await this.plugin.setLayoutForFile(this.file.path, {});
+        }
+
         this.pushUndoEntry({
           filePath: this.file.path,
-          label:
-            patchFn === insertChildNode
-              ? `Added child to “${node.label || node.text}”`
-              : `Added sibling near “${node.label || node.text}”`,
-          showBanner: false,
+          label: operation.label,
+          showBanner: operation.showBanner,
           beforeContent: content,
-          afterContent: patch.content,
+          afterContent: operation.content,
           beforeLayout,
-          afterLayout: {},
-          restoreSelectionNodeId: node.id,
+          afterLayout,
+          restoreSelectionNodeId: operation.restoreSelectionNodeId,
         });
       }
-      await this.refresh();
-    } catch (error) {
-      if (error instanceof StructurePatchError) {
-        new Notice(error.message);
-        if (error.code === "STALE_SOURCE") {
-          await this.refresh();
-        }
-        return;
-      }
 
-      new Notice("Failed to update the note structure.");
+      await this.refresh();
     } finally {
       this.isApplyingLocalChange = false;
     }
@@ -1665,51 +1616,22 @@ export class MindMapView extends ItemView {
     dropPreview: DropPreviewState,
     beforeLayout: Record<string, NodeLayoutOffset>,
   ): Promise<void> {
-    if (!this.file || !this.parsed) {
-      return;
-    }
-
-    const sourceNode = this.parsed.nodesById.get(anchorNodeId);
-    const targetNode = this.parsed.nodesById.get(dropPreview.targetNodeId);
-    if (!sourceNode || !targetNode) {
-      await this.refresh();
+    if (!this.file) {
       return;
     }
 
     this.isApplyingLocalChange = true;
 
     try {
-      const content = await this.app.vault.read(this.file);
-      const patch = moveNode(
-        content,
-        this.parsed,
-        sourceNode,
-        targetNode,
-        dropPreview.position,
+      await this.applyMarkdownTextOperation((sourceRef, content) =>
+        moveNodeInMarkdown(
+          sourceRef,
+          content,
+          anchorNodeId,
+          dropPreview.targetNodeId,
+          dropPreview.position,
+        ),
       );
-      this.pendingSelection = patch.insertedNode
-        ? {
-            source: {
-              type: "inserted",
-              selection: patch.insertedNode,
-              startEditing: false,
-            },
-          }
-        : null;
-      await this.app.vault.modify(this.file, patch.content);
-      this.nodeLayoutOffsets = {};
-      await this.plugin.setLayoutForFile(this.file.path, {});
-      this.pushUndoEntry({
-        filePath: this.file.path,
-        label: `Moved “${sourceNode.label || sourceNode.text}”`,
-        showBanner: false,
-        beforeContent: content,
-        afterContent: patch.content,
-        beforeLayout,
-        afterLayout: {},
-        restoreSelectionNodeId: sourceNode.id,
-      });
-      await this.refresh();
     } catch (error) {
       this.nodeLayoutOffsets = cloneLayoutOffsets(beforeLayout);
       if (error instanceof StructurePatchError) {
