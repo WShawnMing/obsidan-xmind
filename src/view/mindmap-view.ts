@@ -114,11 +114,23 @@ interface DropPreviewState {
   position: MoveNodePosition;
 }
 
+interface AssociationLabelDragState {
+  pointerId: number;
+  associationId: string;
+  startClientX: number;
+  startClientY: number;
+  startOffset: NodeLayoutOffset;
+  beforeAssociations: MindMapAssociation[];
+  didDrag: boolean;
+}
+
 interface RenderedAssociation {
   association: MindMapAssociation;
   fromNode: MindMapNode;
   toNode: MindMapNode;
   path: string;
+  labelX: number;
+  labelY: number;
 }
 
 export class MindMapView extends ItemView {
@@ -129,6 +141,7 @@ export class MindMapView extends ItemView {
   private selectedNodeId: string | null = null;
   private selectedAssociationId: string | null = null;
   private editingNodeId: string | null = null;
+  private editingAssociationId: string | null = null;
   private editorInput: HTMLInputElement | null = null;
   private pendingSelection: PendingSelectionState | null = null;
   private undoHistory: UndoHistoryEntry[] = [];
@@ -137,6 +150,7 @@ export class MindMapView extends ItemView {
   private associations: MindMapAssociation[] = [];
   private lastRenderedLayout: MindMapLayout | null = null;
   private nodeDragState: NodeDragState | null = null;
+  private associationLabelDragState: AssociationLabelDragState | null = null;
   private dropPreview: DropPreviewState | null = null;
   private pendingAssociationSourceNodeId: string | null = null;
   private pendingEditOnClickNodeId: string | null = null;
@@ -343,6 +357,11 @@ export class MindMapView extends ItemView {
   }
 
   async editSelectedNode(): Promise<void> {
+    if (this.selectedAssociationId) {
+      this.startEditingAssociation(this.selectedAssociationId);
+      return;
+    }
+
     if (!this.selectedNodeId) {
       return;
     }
@@ -353,6 +372,7 @@ export class MindMapView extends ItemView {
     return (
       !!this.file &&
       !this.editingNodeId &&
+      !this.editingAssociationId &&
       !this.isCommittingEdit &&
       !this.hasTextInputFocus() &&
       this.undoHistory.length > 0
@@ -364,6 +384,7 @@ export class MindMapView extends ItemView {
       !this.file ||
       !this.parsed ||
       this.editingNodeId ||
+      this.editingAssociationId ||
       !this.selectedNodeId ||
       this.hasTextInputFocus()
     ) {
@@ -379,6 +400,7 @@ export class MindMapView extends ItemView {
       !this.file ||
       !this.parsed ||
       this.editingNodeId ||
+      this.editingAssociationId ||
       !this.selectedNodeId ||
       this.hasTextInputFocus()
     ) {
@@ -406,6 +428,7 @@ export class MindMapView extends ItemView {
       !this.file ||
       !this.parsed ||
       this.editingNodeId ||
+      this.editingAssociationId ||
       !this.selectedNodeId ||
       this.hasTextInputFocus()
     ) {
@@ -430,6 +453,7 @@ export class MindMapView extends ItemView {
       !!this.parsed &&
       !!this.selectedNodeId &&
       !this.editingNodeId &&
+      !this.editingAssociationId &&
       !this.hasTextInputFocus() &&
       !!this.lastRenderedLayout
     );
@@ -441,6 +465,7 @@ export class MindMapView extends ItemView {
       !this.parsed ||
       !this.selectedNodeId ||
       this.editingNodeId ||
+      this.editingAssociationId ||
       this.hasTextInputFocus()
     ) {
       return false;
@@ -891,7 +916,9 @@ export class MindMapView extends ItemView {
       svg.append(path);
     }
 
-    for (const association of this.getRenderedAssociations(layout)) {
+    const renderedAssociations = this.getRenderedAssociations(layout);
+
+    for (const association of renderedAssociations) {
       const path = document.createElementNS(SVG_NS, "path");
       path.setAttribute("d", association.path);
       path.classList.add("oxm-association");
@@ -911,6 +938,11 @@ export class MindMapView extends ItemView {
         this.contentEl.focus();
         this.render();
       });
+      path.addEventListener("dblclick", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.startEditingAssociation(association.association.id);
+      });
       path.addEventListener("contextmenu", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -922,6 +954,13 @@ export class MindMapView extends ItemView {
         this.openAssociationContextMenu(event, association.association);
       });
       svg.append(path);
+    }
+
+    for (const association of renderedAssociations) {
+      const labelEl = this.renderAssociationLabel(association);
+      if (labelEl) {
+        nodes.append(labelEl);
+      }
     }
 
     const dropPreviewElements = this.renderDropPreview(layout);
@@ -1182,9 +1221,130 @@ export class MindMapView extends ItemView {
 
     const caption = document.createElement("div");
     caption.className = "oxm-image-caption";
-    caption.textContent = node.label || image?.target || "Image";
+
+    const captionTitle = document.createElement("div");
+    captionTitle.className = "oxm-image-caption-title";
+    captionTitle.textContent = node.label || image?.target || "Image";
+    caption.append(captionTitle);
+
+    if (image?.title?.trim()) {
+      const note = document.createElement("div");
+      note.className = "oxm-image-caption-note";
+      note.textContent = image.title.trim();
+      caption.append(note);
+    }
+
     wrapper.append(media, caption);
     return wrapper;
+  }
+
+  private renderAssociationLabel(rendered: RenderedAssociation): HTMLElement | null {
+    const association = rendered.association;
+    const isEditing = this.editingAssociationId === association.id;
+    const label = association.label?.trim() ?? "";
+    const shouldShow = isEditing || this.selectedAssociationId === association.id || label.length > 0;
+    if (!shouldShow) {
+      return null;
+    }
+
+    const element = document.createElement("div");
+    element.className = "oxm-association-label";
+    element.style.left = `${rendered.labelX}px`;
+    element.style.top = `${rendered.labelY}px`;
+
+    if (this.selectedAssociationId === association.id && !isEditing) {
+      element.classList.add("is-selected");
+    }
+
+    if (isEditing) {
+      element.classList.add("is-editing");
+      const input = document.createElement("input");
+      input.className = "oxm-association-input";
+      input.type = "text";
+      input.value = this.editingSeedText ?? label;
+      input.placeholder = "Relationship";
+      input.addEventListener("keydown", (event) => {
+        if (event.isComposing || this.isEditorComposing) {
+          return;
+        }
+
+        if (event.key === "Enter") {
+          event.preventDefault();
+          event.stopPropagation();
+          void this.commitEditing();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          this.endEditing(true);
+          this.render();
+        }
+      });
+      input.addEventListener("compositionstart", () => {
+        this.isEditorComposing = true;
+        this.commitAfterComposition = false;
+      });
+      input.addEventListener("compositionend", () => {
+        this.isEditorComposing = false;
+        if (this.commitAfterComposition) {
+          this.commitAfterComposition = false;
+          void this.commitEditing();
+        }
+      });
+      input.addEventListener("blur", () => {
+        if (this.isEditorComposing) {
+          this.commitAfterComposition = true;
+          return;
+        }
+        void this.commitEditing();
+      });
+      element.append(input);
+      this.editorInput = input;
+      window.requestAnimationFrame(() => {
+        input.focus();
+        const end = input.value.length;
+        input.setSelectionRange(end, end);
+      });
+      this.editingSeedText = null;
+      return element;
+    }
+
+    const text = document.createElement("div");
+    text.className = "oxm-association-label-text";
+    text.textContent = label || "Add relationship";
+    if (label.length === 0) {
+      element.classList.add("is-placeholder");
+    }
+    element.append(text);
+
+    element.addEventListener("pointerdown", (event) => {
+      this.onAssociationLabelPointerDown(event, association.id);
+    });
+    element.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.selectedAssociationId = association.id;
+      this.selectedNodeId = null;
+      this.pendingAssociationSourceNodeId = null;
+      this.contentEl.focus();
+      this.render();
+    });
+    element.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.startEditingAssociation(association.id);
+    });
+    element.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.selectedAssociationId = association.id;
+      this.selectedNodeId = null;
+      this.pendingAssociationSourceNodeId = null;
+      this.contentEl.focus();
+      this.render();
+      this.openAssociationContextMenu(event, association);
+    });
+
+    return element;
   }
 
   private startEditing(nodeId: string, seedText: string | null = null): void {
@@ -1204,7 +1364,26 @@ export class MindMapView extends ItemView {
     this.selectedAssociationId = null;
     this.pendingAssociationSourceNodeId = null;
     this.editingNodeId = nodeId;
+    this.editingAssociationId = null;
     this.editingSeedText = seedText;
+    this.render();
+  }
+
+  private startEditingAssociation(
+    associationId: string,
+    seedText: string | null = null,
+  ): void {
+    const association = this.associations.find((item) => item.id === associationId);
+    if (!association) {
+      return;
+    }
+
+    this.selectedNodeId = null;
+    this.selectedAssociationId = associationId;
+    this.pendingAssociationSourceNodeId = null;
+    this.editingNodeId = null;
+    this.editingAssociationId = associationId;
+    this.editingSeedText = seedText ?? association.label ?? "";
     this.render();
   }
 
@@ -1363,12 +1542,53 @@ export class MindMapView extends ItemView {
     event.stopPropagation();
   }
 
+  private onAssociationLabelPointerDown(event: PointerEvent, associationId: string): void {
+    if (event.button !== 0 || this.editingNodeId || this.editingAssociationId) {
+      return;
+    }
+
+    const association = this.associations.find((item) => item.id === associationId);
+    if (!association) {
+      return;
+    }
+
+    this.selectedAssociationId = associationId;
+    this.selectedNodeId = null;
+    this.pendingAssociationSourceNodeId = null;
+    this.contentEl.focus();
+
+    this.associationLabelDragState = {
+      pointerId: event.pointerId,
+      associationId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startOffset: association.labelOffset
+        ? { x: association.labelOffset.x, y: association.labelOffset.y }
+        : { x: 0, y: 0 },
+      beforeAssociations: cloneAssociations(this.associations),
+      didDrag: false,
+    };
+
+    this.elements?.surface.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
   private async commitEditing(): Promise<void> {
-    if (!this.file || !this.parsed || !this.editingNodeId || !this.editorInput) {
+    if (!this.file || !this.editorInput) {
       return;
     }
 
     if (this.isCommittingEdit) {
+      return;
+    }
+
+    if (this.editingAssociationId) {
+      await this.commitAssociationEditing();
+      return;
+    }
+
+    if (!this.parsed || !this.editingNodeId) {
       return;
     }
 
@@ -1400,11 +1620,72 @@ export class MindMapView extends ItemView {
     }
   }
 
+  private async commitAssociationEditing(): Promise<void> {
+    if (!this.file || !this.editorInput || !this.editingAssociationId) {
+      return;
+    }
+
+    if (this.isCommittingEdit) {
+      return;
+    }
+
+    this.isCommittingEdit = true;
+    const associationId = this.editingAssociationId;
+    const nextLabel = normalizeAssociationLabel(this.editorInput.value);
+
+    try {
+      const beforeAssociations = cloneAssociations(this.associations);
+      const nextAssociations = cloneAssociations(this.associations);
+      const target = nextAssociations.find((association) => association.id === associationId);
+      if (!target) {
+        this.endEditing(false);
+        this.render();
+        return;
+      }
+
+      target.label = nextLabel || undefined;
+      this.endEditing(false);
+
+      if (associationsEqual(beforeAssociations, nextAssociations)) {
+        this.render();
+        return;
+      }
+
+      const content = await this.app.vault.read(this.file);
+      await this.plugin.setAssociationsForFile(this.file.path, nextAssociations);
+      this.associations = cloneAssociations(nextAssociations);
+      this.selectedAssociationId = associationId;
+      this.pushUndoEntry({
+        filePath: this.file.path,
+        label: nextLabel ? "Edited relationship text" : "Cleared relationship text",
+        showBanner: false,
+        beforeContent: content,
+        afterContent: content,
+        beforeLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+        afterLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+        beforeAssociations,
+        afterAssociations: nextAssociations,
+        restoreSelectionNodeId: null,
+      });
+      this.render();
+    } catch {
+      this.endEditing(false);
+      new Notice("Failed to update the relationship text.");
+      this.render();
+    } finally {
+      this.isCommittingEdit = false;
+    }
+  }
+
   private endEditing(restoreSelection: boolean): void {
     if (restoreSelection && this.editingNodeId) {
       this.selectedNodeId = this.editingNodeId;
     }
+    if (restoreSelection && this.editingAssociationId) {
+      this.selectedAssociationId = this.editingAssociationId;
+    }
     this.editingNodeId = null;
+    this.editingAssociationId = null;
     this.editingSeedText = null;
     this.isEditorComposing = false;
     this.commitAfterComposition = false;
@@ -1416,7 +1697,7 @@ export class MindMapView extends ItemView {
       return;
     }
 
-    if (this.editingNodeId) {
+    if (this.editingNodeId || this.editingAssociationId) {
       return;
     }
 
@@ -1456,6 +1737,20 @@ export class MindMapView extends ItemView {
       event.preventDefault();
       void this.deleteAssociation(this.selectedAssociationId);
       return;
+    }
+
+    if (this.selectedAssociationId) {
+      if (shouldStartTypingEdit(event)) {
+        event.preventDefault();
+        this.startEditingAssociation(this.selectedAssociationId, event.key);
+        return;
+      }
+
+      if (event.key === "Enter" || event.key === "F2") {
+        event.preventDefault();
+        this.startEditingAssociation(this.selectedAssociationId);
+        return;
+      }
     }
 
     if (!this.selectedNodeId) {
@@ -1526,7 +1821,16 @@ export class MindMapView extends ItemView {
   }
 
   private onCompositionStart(): void {
-    if (!this.selectedNodeId || this.editingNodeId) {
+    if (this.editingNodeId || this.editingAssociationId) {
+      return;
+    }
+
+    if (this.selectedAssociationId) {
+      this.startEditingAssociation(this.selectedAssociationId, "");
+      return;
+    }
+
+    if (!this.selectedNodeId) {
       return;
     }
 
@@ -1552,6 +1856,31 @@ export class MindMapView extends ItemView {
   }
 
   private onPointerMove(event: PointerEvent): void {
+    if (this.associationLabelDragState && event.pointerId === this.associationLabelDragState.pointerId) {
+      const scale = this.viewport.scale || 1;
+      const deltaX = (event.clientX - this.associationLabelDragState.startClientX) / scale;
+      const deltaY = (event.clientY - this.associationLabelDragState.startClientY) / scale;
+
+      if (!this.associationLabelDragState.didDrag && Math.hypot(deltaX, deltaY) < 3) {
+        return;
+      }
+
+      this.associationLabelDragState.didDrag = true;
+      const association = this.associations.find(
+        (item) => item.id === this.associationLabelDragState?.associationId,
+      );
+      if (!association) {
+        return;
+      }
+
+      association.labelOffset = {
+        x: this.associationLabelDragState.startOffset.x + deltaX,
+        y: this.associationLabelDragState.startOffset.y + deltaY,
+      };
+      this.render();
+      return;
+    }
+
     if (this.nodeDragState && event.pointerId === this.nodeDragState.pointerId) {
       const scale = this.viewport.scale || 1;
       const rawDeltaX = (event.clientX - this.nodeDragState.startClientX) / scale;
@@ -1593,6 +1922,24 @@ export class MindMapView extends ItemView {
   }
 
   private onPointerUp(event: PointerEvent): void {
+    if (
+      this.associationLabelDragState &&
+      event.pointerId === this.associationLabelDragState.pointerId
+    ) {
+      const dragState = this.associationLabelDragState;
+      this.associationLabelDragState = null;
+      if (this.elements?.surface.hasPointerCapture(event.pointerId)) {
+        this.elements.surface.releasePointerCapture(event.pointerId);
+      }
+
+      if (dragState.didDrag) {
+        void this.persistAssociationLabelDrag(dragState);
+      } else {
+        this.render();
+      }
+      return;
+    }
+
     if (this.nodeDragState && event.pointerId === this.nodeDragState.pointerId) {
       const didDrag = this.nodeDragState.didDrag;
       const dropPreview = this.dropPreview;
@@ -1893,6 +2240,26 @@ export class MindMapView extends ItemView {
 
     menu.addItem((item) => {
       item
+        .setTitle("Edit relationship text")
+        .setIcon("pencil")
+        .onClick(() => {
+          this.startEditingAssociation(association.id);
+        });
+    });
+
+    if (association.labelOffset && (association.labelOffset.x !== 0 || association.labelOffset.y !== 0)) {
+      menu.addItem((item) => {
+        item
+          .setTitle("Reset relationship layout")
+          .setIcon("rotate-ccw")
+          .onClick(() => {
+            void this.resetAssociationLabelOffset(association.id);
+          });
+      });
+    }
+
+    menu.addItem((item) => {
+      item
         .setTitle("Delete relationship")
         .setIcon("trash")
         .onClick(() => {
@@ -1922,11 +2289,19 @@ export class MindMapView extends ItemView {
         continue;
       }
 
+      const geometry = buildAssociationGeometry(
+        fromPositioned,
+        toPositioned,
+        association.labelOffset,
+      );
+
       rendered.push({
         association,
         fromNode,
         toNode,
-        path: buildAssociationPath(fromPositioned, toPositioned),
+        path: geometry.path,
+        labelX: geometry.labelX,
+        labelY: geometry.labelY,
       });
     }
 
@@ -2020,6 +2395,42 @@ export class MindMapView extends ItemView {
       beforeAssociations,
       afterAssociations: nextAssociations,
       restoreSelectionNodeId: this.selectedNodeId,
+    });
+    this.render();
+  }
+
+  private async resetAssociationLabelOffset(associationId: string): Promise<void> {
+    if (!this.file) {
+      return;
+    }
+
+    const beforeAssociations = cloneAssociations(this.associations);
+    const nextAssociations = cloneAssociations(this.associations);
+    const association = nextAssociations.find((item) => item.id === associationId);
+    if (!association || !association.labelOffset) {
+      return;
+    }
+
+    association.labelOffset = undefined;
+    if (associationsEqual(beforeAssociations, nextAssociations)) {
+      return;
+    }
+
+    const content = await this.app.vault.read(this.file);
+    await this.plugin.setAssociationsForFile(this.file.path, nextAssociations);
+    this.associations = cloneAssociations(nextAssociations);
+    this.selectedAssociationId = associationId;
+    this.pushUndoEntry({
+      filePath: this.file.path,
+      label: "Reset relationship layout",
+      showBanner: false,
+      beforeContent: content,
+      afterContent: content,
+      beforeLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+      afterLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+      beforeAssociations,
+      afterAssociations: nextAssociations,
+      restoreSelectionNodeId: null,
     });
     this.render();
   }
@@ -2195,6 +2606,46 @@ export class MindMapView extends ItemView {
       this.nodeLayoutOffsets = cloneLayoutOffsets(beforeLayout);
       this.render();
       new Notice("Failed to save the topic layout.");
+    } finally {
+      this.isApplyingLocalChange = false;
+    }
+  }
+
+  private async persistAssociationLabelDrag(
+    dragState: AssociationLabelDragState,
+  ): Promise<void> {
+    if (!this.file) {
+      return;
+    }
+
+    const afterAssociations = cloneAssociations(this.associations);
+    if (associationsEqual(dragState.beforeAssociations, afterAssociations)) {
+      this.render();
+      return;
+    }
+
+    this.isApplyingLocalChange = true;
+    try {
+      const content = await this.app.vault.read(this.file);
+      await this.plugin.setAssociationsForFile(this.file.path, afterAssociations);
+      this.pushUndoEntry({
+        filePath: this.file.path,
+        label: "Moved relationship label",
+        showBanner: false,
+        beforeContent: content,
+        afterContent: content,
+        beforeLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+        afterLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+        beforeAssociations: dragState.beforeAssociations,
+        afterAssociations,
+        restoreSelectionNodeId: null,
+      });
+      this.selectedAssociationId = dragState.associationId;
+      this.render();
+    } catch {
+      this.associations = cloneAssociations(dragState.beforeAssociations);
+      this.render();
+      new Notice("Failed to save the relationship layout.");
     } finally {
       this.isApplyingLocalChange = false;
     }
@@ -2382,10 +2833,11 @@ function buildPreviewCurve(
   return `M ${startX} ${startY} C ${startX + curve * direction} ${startY}, ${endX - curve * direction} ${endY}, ${endX} ${endY}`;
 }
 
-function buildAssociationPath(
+function buildAssociationGeometry(
   from: PositionedMindMapNode,
   to: PositionedMindMapNode,
-): string {
+  offset?: NodeLayoutOffset,
+): { path: string; labelX: number; labelY: number } {
   const fromCenterX = from.x + from.width / 2;
   const fromCenterY = from.y + from.height / 2;
   const toCenterX = to.x + to.width / 2;
@@ -2413,14 +2865,24 @@ function buildAssociationPath(
   const deltaY = endY - startY;
   const controlX = Math.max(36, Math.abs(deltaX) * 0.34);
   const controlY = Math.max(18, Math.abs(deltaY) * 0.22);
+  const labelX = (startX + endX) / 2 + (offset?.x ?? 0);
+  const labelY = (startY + endY) / 2 + (offset?.y ?? 0);
 
   if (Math.abs(deltaX) >= Math.abs(deltaY)) {
     const direction = deltaX >= 0 ? 1 : -1;
-    return `M ${startX} ${startY} C ${startX + controlX * direction} ${startY}, ${endX - controlX * direction} ${endY}, ${endX} ${endY}`;
+    return {
+      path: `M ${startX} ${startY} C ${startX + controlX * direction} ${startY}, ${endX - controlX * direction} ${endY}, ${endX} ${endY}`,
+      labelX,
+      labelY,
+    };
   }
 
   const verticalDirection = deltaY >= 0 ? 1 : -1;
-  return `M ${startX} ${startY} C ${startX} ${startY + controlY * verticalDirection}, ${endX} ${endY - controlY * verticalDirection}, ${endX} ${endY}`;
+  return {
+    path: `M ${startX} ${startY} C ${startX} ${startY + controlY * verticalDirection}, ${endX} ${endY - controlY * verticalDirection}, ${endX} ${endY}`,
+    labelX,
+    labelY,
+  };
 }
 
 function getVisibleNodesByVisualOrder(
@@ -2459,6 +2921,13 @@ function normalizePastedTopicText(value: string): string {
     .map((part) => part.trim())
     .filter((part) => part.length > 0)
     .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeAssociationLabel(value: string): string {
+  return value
+    .replace(/[\r\n]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }

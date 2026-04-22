@@ -632,6 +632,17 @@ function normalizeAssociationStore(
             subtreeSignature: association.to.locator.subtreeSignature,
           },
         },
+        label: typeof association.label === "string" ? association.label : undefined,
+        labelOffset:
+          association.labelOffset &&
+          typeof association.labelOffset === "object" &&
+          Number.isFinite(association.labelOffset.x) &&
+          Number.isFinite(association.labelOffset.y)
+            ? {
+                x: association.labelOffset.x,
+                y: association.labelOffset.y,
+              }
+            : undefined,
       });
     }
 
@@ -670,6 +681,13 @@ function cloneAssociations(
         subtreeSignature: association.to.locator.subtreeSignature,
       },
     },
+    label: association.label,
+    labelOffset: association.labelOffset
+      ? {
+          x: association.labelOffset.x,
+          y: association.labelOffset.y,
+        }
+      : undefined,
   }));
 }
 

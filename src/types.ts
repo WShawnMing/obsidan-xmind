@@ -136,4 +136,6 @@ export interface MindMapAssociation {
   id: string;
   from: MindMapAssociationEndpoint;
   to: MindMapAssociationEndpoint;
+  label?: string;
+  labelOffset?: NodeLayoutOffset;
 }

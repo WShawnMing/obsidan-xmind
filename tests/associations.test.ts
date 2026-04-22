@@ -59,6 +59,29 @@ describe("associations", () => {
     expect(result.associations[0]?.to.nodeId).toBe(after.root.children[2]?.id);
   });
 
+  it("preserves relationship label metadata during reconciliation", () => {
+    const before = parseMarkdownToMindMap(file, ["# Root", "## Alpha", "## Beta"].join("\n"));
+    const alpha = before.root.children[0];
+    const beta = before.root.children[1];
+
+    const association = {
+      id: "assoc-1",
+      from: buildAssociationEndpoint(before, alpha!.id)!,
+      to: buildAssociationEndpoint(before, beta!.id)!,
+      label: "depends on",
+      labelOffset: { x: 16, y: -8 },
+    };
+
+    const after = parseMarkdownToMindMap(
+      file,
+      ["# Root", "## Inserted", "## Alpha", "## Beta"].join("\n"),
+    );
+    const result = reconcileAssociations(after, [association]);
+
+    expect(result.associations[0]?.label).toBe("depends on");
+    expect(result.associations[0]?.labelOffset).toEqual({ x: 16, y: -8 });
+  });
+
   it("drops associations whose endpoints can no longer be resolved", () => {
     const before = parseMarkdownToMindMap(file, ["# Root", "## Alpha", "## Beta"].join("\n"));
     const alpha = before.root.children[0];

@@ -81,6 +81,13 @@ export function reconcileAssociations(
       id: association.id,
       from: fromEndpoint,
       to: toEndpoint,
+      label: association.label,
+      labelOffset: association.labelOffset
+        ? {
+            x: association.labelOffset.x,
+            y: association.labelOffset.y,
+          }
+        : undefined,
     };
 
     if (!associationEquals(association, normalized)) {
@@ -113,6 +120,13 @@ export function cloneAssociations(
       nodeId: association.to.nodeId,
       locator: cloneLocator(association.to.locator),
     },
+    label: association.label,
+    labelOffset: association.labelOffset
+      ? {
+          x: association.labelOffset.x,
+          y: association.labelOffset.y,
+        }
+      : undefined,
   }));
 }
 
@@ -360,7 +374,9 @@ function associationEquals(left: MindMapAssociation, right: MindMapAssociation):
   return (
     left.id === right.id &&
     endpointEquals(left.from, right.from) &&
-    endpointEquals(left.to, right.to)
+    endpointEquals(left.to, right.to) &&
+    left.label === right.label &&
+    offsetEquals(left.labelOffset, right.labelOffset)
   );
 }
 
@@ -380,6 +396,21 @@ function locatorEquals(left: MindMapNodeLocator, right: MindMapNodeLocator): boo
     left.subtreeSignature === right.subtreeSignature &&
     arrayEquals(left.ancestorTexts, right.ancestorTexts)
   );
+}
+
+function offsetEquals(
+  left: MindMapAssociation["labelOffset"] | undefined,
+  right: MindMapAssociation["labelOffset"] | undefined,
+): boolean {
+  if (!left && !right) {
+    return true;
+  }
+
+  if (!left || !right) {
+    return false;
+  }
+
+  return left.x === right.x && left.y === right.y;
 }
 
 function normalizeKey(value: string): string {

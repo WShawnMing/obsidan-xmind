@@ -141,7 +141,7 @@ describe("parseMarkdownToMindMap", () => {
       [
         "# Root",
         "## Section",
-        "![Preview](assets/example.png)",
+        "![Preview](assets/example.png \"Explain this image\")",
       ].join("\n"),
     );
 
@@ -149,6 +149,7 @@ describe("parseMarkdownToMindMap", () => {
     expect(imageNode?.source.kind).toBe("image-embed");
     expect(imageNode?.label).toBe("Preview");
     expect(imageNode?.image?.target).toBe("assets/example.png");
+    expect(imageNode?.image?.title).toBe("Explain this image");
   });
 
   it("creates image-embed children under overflow list items", () => {
