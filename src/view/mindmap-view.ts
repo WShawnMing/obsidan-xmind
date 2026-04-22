@@ -120,6 +120,8 @@ export class MindMapView extends ItemView {
   private dropPreview: DropPreviewState | null = null;
   private pendingEditOnClickNodeId: string | null = null;
   private editingSeedText: string | null = null;
+  private isEditorComposing = false;
+  private commitAfterComposition = false;
   private suppressNextNodeClick = false;
   private isCommittingEdit = false;
   private isApplyingLocalChange = false;
@@ -839,6 +841,10 @@ export class MindMapView extends ItemView {
       input.type = "text";
       input.value = initialValue;
       input.addEventListener("keydown", (event) => {
+        if (event.isComposing || this.isEditorComposing) {
+          return;
+        }
+
         if (event.key === "Enter") {
           event.preventDefault();
           event.stopPropagation();
@@ -850,7 +856,22 @@ export class MindMapView extends ItemView {
           this.render();
         }
       });
+      input.addEventListener("compositionstart", () => {
+        this.isEditorComposing = true;
+        this.commitAfterComposition = false;
+      });
+      input.addEventListener("compositionend", () => {
+        this.isEditorComposing = false;
+        if (this.commitAfterComposition) {
+          this.commitAfterComposition = false;
+          void this.commitEditing();
+        }
+      });
       input.addEventListener("blur", () => {
+        if (this.isEditorComposing) {
+          this.commitAfterComposition = true;
+          return;
+        }
         void this.commitEditing();
       });
       contentEl.append(input);
@@ -1169,6 +1190,8 @@ export class MindMapView extends ItemView {
     }
     this.editingNodeId = null;
     this.editingSeedText = null;
+    this.isEditorComposing = false;
+    this.commitAfterComposition = false;
     this.editorInput = null;
   }
 
