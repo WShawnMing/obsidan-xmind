@@ -133,6 +133,13 @@ interface RenderedAssociation {
   labelY: number;
 }
 
+interface PendingTypingStart {
+  kind: "node" | "association";
+  id: string;
+  seedText: string;
+  timeoutId: number;
+}
+
 export class MindMapView extends ItemView {
   private plugin: ObsidianXMindPlugin;
   private file: TFile | null = null;
@@ -162,6 +169,7 @@ export class MindMapView extends ItemView {
   private isApplyingLocalChange = false;
   private isUndoing = false;
   private undoBarTimeout: number | null = null;
+  private pendingTypingStart: PendingTypingStart | null = null;
   private viewport = { ...DEFAULT_VIEWPORT };
   private panState:
     | {
@@ -210,6 +218,7 @@ export class MindMapView extends ItemView {
 
   async onClose(): Promise<void> {
     this.clearUndoBarTimeout();
+    this.clearPendingTypingStart();
     this.endEditing(false);
   }
 
@@ -269,6 +278,7 @@ export class MindMapView extends ItemView {
       this.nodeDragState = null;
       this.dropPreview = null;
       this.pendingAssociationSourceNodeId = null;
+      this.clearPendingTypingStart();
       this.endEditing(false);
       this.render();
       this.renderUndoBar();
@@ -333,6 +343,7 @@ export class MindMapView extends ItemView {
     }
 
     this.parsed = parsed;
+    this.clearPendingTypingStart();
     this.endEditing(false);
     if (this.pendingSelection) {
       this.applyPendingSelection(parsed);
@@ -857,7 +868,6 @@ export class MindMapView extends ItemView {
       (event) => this.onWheel(event),
       { passive: false },
     );
-    this.contentEl.addEventListener("keydown", (event) => this.onKeyDown(event));
     this.contentEl.addEventListener("compositionstart", () => this.onCompositionStart());
 
     this.contentEl.append(toolbar, surface, undoBar);
@@ -1363,6 +1373,7 @@ export class MindMapView extends ItemView {
     this.selectedNodeId = nodeId;
     this.selectedAssociationId = null;
     this.pendingAssociationSourceNodeId = null;
+    this.clearPendingTypingStart();
     this.editingNodeId = nodeId;
     this.editingAssociationId = null;
     this.editingSeedText = seedText;
@@ -1381,6 +1392,7 @@ export class MindMapView extends ItemView {
     this.selectedNodeId = null;
     this.selectedAssociationId = associationId;
     this.pendingAssociationSourceNodeId = null;
+    this.clearPendingTypingStart();
     this.editingNodeId = null;
     this.editingAssociationId = associationId;
     this.editingSeedText = seedText ?? association.label ?? "";
@@ -1499,6 +1511,7 @@ export class MindMapView extends ItemView {
     }
 
     const wasSelected = this.selectedNodeId === nodeId;
+    this.clearPendingTypingStart();
     this.selectedAssociationId = null;
     this.pendingEditOnClickNodeId = wasSelected ? null : nodeId;
     if (!wasSelected) {
@@ -1552,6 +1565,7 @@ export class MindMapView extends ItemView {
       return;
     }
 
+    this.clearPendingTypingStart();
     this.selectedAssociationId = associationId;
     this.selectedNodeId = null;
     this.pendingAssociationSourceNodeId = null;
@@ -1687,6 +1701,7 @@ export class MindMapView extends ItemView {
     this.editingNodeId = null;
     this.editingAssociationId = null;
     this.editingSeedText = null;
+    this.clearPendingTypingStart();
     this.isEditorComposing = false;
     this.commitAfterComposition = false;
     this.editorInput = null;
@@ -1741,8 +1756,10 @@ export class MindMapView extends ItemView {
 
     if (this.selectedAssociationId) {
       if (shouldStartTypingEdit(event)) {
-        event.preventDefault();
-        this.startEditingAssociation(this.selectedAssociationId, event.key);
+        if (event.key === " ") {
+          event.preventDefault();
+        }
+        this.scheduleTypingStart("association", this.selectedAssociationId, event.key);
         return;
       }
 
@@ -1782,9 +1799,11 @@ export class MindMapView extends ItemView {
     }
 
     if (shouldStartTypingEdit(event)) {
-      event.preventDefault();
+      if (event.key === " ") {
+        event.preventDefault();
+      }
       this.pendingAssociationSourceNodeId = null;
-      this.startEditing(this.selectedNodeId, event.key);
+      this.scheduleTypingStart("node", this.selectedNodeId, event.key);
       return;
     }
 
@@ -1825,6 +1844,8 @@ export class MindMapView extends ItemView {
       return;
     }
 
+    this.clearPendingTypingStart();
+
     if (this.selectedAssociationId) {
       this.startEditingAssociation(this.selectedAssociationId, "");
       return;
@@ -1842,6 +1863,7 @@ export class MindMapView extends ItemView {
       return;
     }
 
+    this.clearPendingTypingStart();
     this.pendingEditOnClickNodeId = null;
     this.selectedAssociationId = null;
     this.panState = {
@@ -2760,6 +2782,51 @@ export class MindMapView extends ItemView {
 
     return null;
   }
+
+  private scheduleTypingStart(
+    kind: PendingTypingStart["kind"],
+    id: string,
+    seedText: string,
+  ): void {
+    this.clearPendingTypingStart();
+
+    const timeoutId = window.setTimeout(() => {
+      const pending = this.pendingTypingStart;
+      this.pendingTypingStart = null;
+      if (!pending || pending.id !== id || pending.kind !== kind) {
+        return;
+      }
+
+      if (kind === "association") {
+        if (this.selectedAssociationId !== id || this.editingNodeId || this.editingAssociationId) {
+          return;
+        }
+        this.startEditingAssociation(id, seedText);
+        return;
+      }
+
+      if (this.selectedNodeId !== id || this.editingNodeId || this.editingAssociationId) {
+        return;
+      }
+      this.startEditing(id, seedText);
+    }, 24);
+
+    this.pendingTypingStart = {
+      kind,
+      id,
+      seedText,
+      timeoutId,
+    };
+  }
+
+  private clearPendingTypingStart(): void {
+    if (!this.pendingTypingStart) {
+      return;
+    }
+
+    window.clearTimeout(this.pendingTypingStart.timeoutId);
+    this.pendingTypingStart = null;
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -2905,6 +2972,10 @@ function getVisibleNodesByVisualOrder(
 
 function shouldStartTypingEdit(event: KeyboardEvent): boolean {
   if (event.metaKey || event.ctrlKey || event.altKey) {
+    return false;
+  }
+
+  if (event.isComposing || event.key === "Process" || event.key === "Dead") {
     return false;
   }
 
