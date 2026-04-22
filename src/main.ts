@@ -96,16 +96,6 @@ export default class ObsidianXMindPlugin extends Plugin {
     this.addCommand({
       id: "mind-map-delete-selected-topic",
       name: "Mind map: Delete selected topic",
-      hotkeys: [
-        {
-          modifiers: [],
-          key: "Backspace",
-        },
-        {
-          modifiers: [],
-          key: "Delete",
-        },
-      ],
       checkCallback: (checking) => {
         const view = this.getActiveMindMapView();
         if (!view || !view.canDeleteSelectedNode()) {
@@ -122,12 +112,6 @@ export default class ObsidianXMindPlugin extends Plugin {
     this.addCommand({
       id: "mind-map-select-topic-left",
       name: "Mind map: Select topic to the left",
-      hotkeys: [
-        {
-          modifiers: [],
-          key: "ArrowLeft",
-        },
-      ],
       checkCallback: (checking) => {
         const view = this.getActiveMindMapView();
         if (!view || !view.canNavigateSelection()) {
@@ -144,12 +128,6 @@ export default class ObsidianXMindPlugin extends Plugin {
     this.addCommand({
       id: "mind-map-select-topic-right",
       name: "Mind map: Select topic to the right",
-      hotkeys: [
-        {
-          modifiers: [],
-          key: "ArrowRight",
-        },
-      ],
       checkCallback: (checking) => {
         const view = this.getActiveMindMapView();
         if (!view || !view.canNavigateSelection()) {
@@ -166,12 +144,6 @@ export default class ObsidianXMindPlugin extends Plugin {
     this.addCommand({
       id: "mind-map-select-topic-up",
       name: "Mind map: Select topic above",
-      hotkeys: [
-        {
-          modifiers: [],
-          key: "ArrowUp",
-        },
-      ],
       checkCallback: (checking) => {
         const view = this.getActiveMindMapView();
         if (!view || !view.canNavigateSelection()) {
@@ -188,12 +160,6 @@ export default class ObsidianXMindPlugin extends Plugin {
     this.addCommand({
       id: "mind-map-select-topic-down",
       name: "Mind map: Select topic below",
-      hotkeys: [
-        {
-          modifiers: [],
-          key: "ArrowDown",
-        },
-      ],
       checkCallback: (checking) => {
         const view = this.getActiveMindMapView();
         if (!view || !view.canNavigateSelection()) {
@@ -226,12 +192,6 @@ export default class ObsidianXMindPlugin extends Plugin {
     this.addCommand({
       id: "mind-map-undo-last-action",
       name: "Mind map: Undo last action",
-      hotkeys: [
-        {
-          modifiers: ["Mod"],
-          key: "z",
-        },
-      ],
       checkCallback: (checking) => {
         const view = this.getActiveMindMapView();
         if (!view || !view.canUndoLastAction()) {

@@ -162,6 +162,7 @@ export class MindMapView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.buildUi();
+    this.registerDomEvent(window, "keydown", (event) => this.onWindowKeyDown(event), true);
     this.render();
   }
 
@@ -1218,7 +1219,17 @@ export class MindMapView extends ItemView {
   }
 
   private onKeyDown(event: KeyboardEvent): void {
+    if (event.defaultPrevented) {
+      return;
+    }
+
     if (this.editingNodeId) {
+      return;
+    }
+
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+      event.preventDefault();
+      void this.undoLastAction();
       return;
     }
 
@@ -1242,6 +1253,30 @@ export class MindMapView extends ItemView {
       return;
     }
 
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      this.navigateSelection("left");
+      return;
+    }
+
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      this.navigateSelection("right");
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      this.navigateSelection("up");
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      this.navigateSelection("down");
+      return;
+    }
+
     if (shouldStartTypingEdit(event)) {
       event.preventDefault();
       this.startEditing(this.selectedNodeId, event.key);
@@ -1260,10 +1295,24 @@ export class MindMapView extends ItemView {
       return;
     }
 
+    if (event.key === "Delete" || event.key === "Backspace") {
+      event.preventDefault();
+      void this.deleteSelectedNode();
+      return;
+    }
+
     if (event.key === "F2") {
       event.preventDefault();
       this.startEditing(this.selectedNodeId);
     }
+  }
+
+  private onWindowKeyDown(event: KeyboardEvent): void {
+    if (event.defaultPrevented || !this.isActiveMindMapView() || this.hasTextInputFocus()) {
+      return;
+    }
+
+    this.onKeyDown(event);
   }
 
   private onCompositionStart(): void {
@@ -1755,6 +1804,10 @@ export class MindMapView extends ItemView {
       activeElement instanceof HTMLSelectElement ||
       (activeElement instanceof HTMLElement && activeElement.isContentEditable)
     );
+  }
+
+  private isActiveMindMapView(): boolean {
+    return this.app.workspace.getActiveViewOfType(MindMapView) === this;
   }
 
   private async writeClipboardPreview(copied: CopiedMindMapSubtree): Promise<void> {
