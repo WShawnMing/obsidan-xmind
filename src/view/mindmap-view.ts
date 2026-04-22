@@ -385,11 +385,15 @@ export class MindMapView extends ItemView {
     }
 
     const node = this.parsed.nodesById.get(this.selectedNodeId);
-    if (!node || node.source.kind === "linked-note") {
+    if (!node) {
       return false;
     }
 
-    return this.plugin.hasMindMapClipboard();
+    if (node.source.kind === "heading" || node.source.kind === "overflow-list") {
+      return true;
+    }
+
+    return node.source.kind !== "linked-note" && this.plugin.hasMindMapClipboard();
   }
 
   canDeleteSelectedNode(): boolean {
@@ -602,11 +606,46 @@ export class MindMapView extends ItemView {
   }
 
   async pasteAfterSelectedNode(): Promise<void> {
-    if (!this.file || !this.selectedNodeId) {
+    if (!this.file || !this.parsed || !this.selectedNodeId) {
       return;
     }
 
+    const selectedNode = this.parsed.nodesById.get(this.selectedNodeId);
+    if (!selectedNode) {
+      return;
+    }
+
+    const clipboardText = await this.readClipboardText();
     const copied = this.plugin.getMindMapClipboard();
+    const structuralClipboardText = copied ? copied.lines.join("\n") : null;
+    const normalizedClipboardText = normalizePastedTopicText(clipboardText);
+    const shouldReplaceTitle =
+      (selectedNode.source.kind === "heading" || selectedNode.source.kind === "overflow-list") &&
+      normalizedClipboardText.length > 0 &&
+      (!copied || !structuralClipboardText || clipboardText !== structuralClipboardText);
+
+    if (shouldReplaceTitle) {
+      try {
+        const targetNodeId = this.selectedNodeId;
+        await this.applyMarkdownTextOperation((sourceRef, content) =>
+          renameNodeInMarkdown(sourceRef, content, targetNodeId, normalizedClipboardText),
+        );
+      } catch (error) {
+        if (error instanceof TitlePatchError) {
+          if (error.code === "STALE_SOURCE") {
+            new Notice("The note changed. Refreshing the mind map before retry.");
+            await this.refresh();
+          } else {
+            new Notice(error.message);
+          }
+          return;
+        }
+
+        new Notice("Failed to paste text into the selected topic.");
+      }
+      return;
+    }
+
     if (!copied) {
       return;
     }
@@ -2172,6 +2211,18 @@ export class MindMapView extends ItemView {
       // Ignore clipboard permission failures; the in-plugin clipboard remains available.
     }
   }
+
+  private async readClipboardText(): Promise<string> {
+    if (!navigator.clipboard?.readText) {
+      return "";
+    }
+
+    try {
+      return await navigator.clipboard.readText();
+    } catch {
+      return "";
+    }
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -2314,6 +2365,16 @@ function shouldStartTypingEdit(event: KeyboardEvent): boolean {
   }
 
   return false;
+}
+
+function normalizePastedTopicText(value: string): string {
+  return value
+    .split(/\r?\n/g)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function cloneLayoutOffsets(
