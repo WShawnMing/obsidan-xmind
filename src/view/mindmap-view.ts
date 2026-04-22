@@ -71,6 +71,7 @@ interface PendingSelectionState {
 interface UndoHistoryEntry {
   filePath: string;
   label: string;
+  showBanner: boolean;
   beforeContent: string;
   afterContent: string;
   beforeLayout: Record<string, NodeLayoutOffset>;
@@ -117,6 +118,7 @@ export class MindMapView extends ItemView {
   private isCommittingEdit = false;
   private isApplyingLocalChange = false;
   private isUndoing = false;
+  private undoBarTimeout: number | null = null;
   private viewport = { ...DEFAULT_VIEWPORT };
   private panState:
     | {
@@ -163,6 +165,7 @@ export class MindMapView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    this.clearUndoBarTimeout();
     this.endEditing(false);
   }
 
@@ -203,6 +206,7 @@ export class MindMapView extends ItemView {
       this.selectedNodeId = null;
       this.undoHistory = [];
       this.undoBarDismissed = false;
+      this.clearUndoBarTimeout();
       this.nodeLayoutOffsets = {};
       this.lastRenderedLayout = null;
       this.nodeDragState = null;
@@ -325,6 +329,7 @@ export class MindMapView extends ItemView {
     if (entry.filePath !== this.file.path) {
       this.undoHistory = [];
       this.undoBarDismissed = false;
+      this.clearUndoBarTimeout();
       this.renderUndoBar();
       return;
     }
@@ -338,6 +343,7 @@ export class MindMapView extends ItemView {
       ) {
         this.undoHistory = [];
         this.undoBarDismissed = false;
+        this.clearUndoBarTimeout();
         this.renderUndoBar();
         new Notice("Undo is no longer available because the mind map changed.");
         return;
@@ -353,7 +359,8 @@ export class MindMapView extends ItemView {
           }
         : null;
       this.undoHistory.pop();
-      this.undoBarDismissed = false;
+      this.undoBarDismissed = true;
+      this.clearUndoBarTimeout();
       this.nodeLayoutOffsets = cloneLayoutOffsets(entry.beforeLayout);
       await this.plugin.setLayoutForFile(this.file.path, entry.beforeLayout);
       await this.app.vault.modify(this.file, entry.beforeContent);
@@ -427,6 +434,7 @@ export class MindMapView extends ItemView {
             targetNode.source.kind === "virtual-root"
               ? `Pasted “${copied.text}” into root`
               : `Pasted “${copied.text}” after “${targetNode.label || targetNode.text}”`,
+          showBanner: false,
           beforeContent: content,
           afterContent: patch.content,
           beforeLayout,
@@ -522,6 +530,7 @@ export class MindMapView extends ItemView {
         this.pushUndoEntry({
           filePath: this.file.path,
           label: `Deleted “${node.label || node.text}”`,
+          showBanner: true,
           beforeContent: content,
           afterContent: nextContent,
           beforeLayout,
@@ -603,6 +612,7 @@ export class MindMapView extends ItemView {
     undoDismiss.textContent = "×";
     undoDismiss.addEventListener("click", () => {
       this.undoBarDismissed = true;
+      this.clearUndoBarTimeout();
       this.renderUndoBar();
     });
 
@@ -1055,6 +1065,7 @@ export class MindMapView extends ItemView {
         this.pushUndoEntry({
           filePath: this.file.path,
           label: `Renamed “${node.label || node.text}”`,
+          showBanner: false,
           beforeContent: content,
           afterContent: nextContent,
           beforeLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
@@ -1292,7 +1303,7 @@ export class MindMapView extends ItemView {
 
     const { undoBar, undoMessage } = this.elements;
     const undo = this.undoHistory[this.undoHistory.length - 1];
-    if (!undo || this.undoBarDismissed) {
+    if (!undo || !undo.showBanner || this.undoBarDismissed) {
       undoBar.classList.remove("is-visible");
       undoMessage.textContent = "";
       return;
@@ -1361,6 +1372,7 @@ export class MindMapView extends ItemView {
             patchFn === insertChildNode
               ? `Added child to “${node.label || node.text}”`
               : `Added sibling near “${node.label || node.text}”`,
+          showBanner: false,
           beforeContent: content,
           afterContent: patch.content,
           beforeLayout,
@@ -1507,6 +1519,7 @@ export class MindMapView extends ItemView {
       this.pushUndoEntry({
         filePath: this.file.path,
         label: `Moved “${sourceNode.label || sourceNode.text}”`,
+        showBanner: false,
         beforeContent: content,
         afterContent: patch.content,
         beforeLayout,
@@ -1555,6 +1568,7 @@ export class MindMapView extends ItemView {
       this.pushUndoEntry({
         filePath: this.file.path,
         label: "Moved topic layout",
+        showBanner: false,
         beforeContent: content,
         afterContent: content,
         beforeLayout,
@@ -1581,8 +1595,23 @@ export class MindMapView extends ItemView {
     if (this.undoHistory.length > 50) {
       this.undoHistory.shift();
     }
-    this.undoBarDismissed = false;
+    this.undoBarDismissed = !entry.showBanner;
+    this.clearUndoBarTimeout();
+    if (entry.showBanner) {
+      this.undoBarTimeout = window.setTimeout(() => {
+        this.undoBarDismissed = true;
+        this.undoBarTimeout = null;
+        this.renderUndoBar();
+      }, 3200);
+    }
     this.renderUndoBar();
+  }
+
+  private clearUndoBarTimeout(): void {
+    if (this.undoBarTimeout != null) {
+      window.clearTimeout(this.undoBarTimeout);
+      this.undoBarTimeout = null;
+    }
   }
 
   private async writeClipboardPreview(copied: CopiedMindMapSubtree): Promise<void> {
