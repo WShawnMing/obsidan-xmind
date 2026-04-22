@@ -6,6 +6,7 @@ import {
 } from "./settings";
 import type {
   AppearanceSettings,
+  MindMapAssociation,
   MindMapViewState,
   NodeLayoutOffset,
   PluginData,
@@ -15,12 +16,14 @@ import type { CopiedMindMapSubtree } from "./write/structure-patch-writer";
 
 export default class ObsidianXMindPlugin extends Plugin {
   private layoutByFile: Record<string, Record<string, NodeLayoutOffset>> = {};
+  private associationsByFile: Record<string, MindMapAssociation[]> = {};
   private appearanceSettings: AppearanceSettings = { ...DEFAULT_APPEARANCE_SETTINGS };
   private mindMapClipboard: CopiedMindMapSubtree | null = null;
 
   async onload(): Promise<void> {
     const data = (await this.loadData()) as PluginData | null;
     this.layoutByFile = normalizeLayoutStore(data?.layoutByFile);
+    this.associationsByFile = normalizeAssociationStore(data?.associationsByFile);
     this.appearanceSettings = normalizeAppearanceSettings(data?.appearance);
 
     this.registerView(
@@ -237,6 +240,22 @@ export default class ObsidianXMindPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "mind-map-start-relationship-from-selected-topic",
+      name: "Mind map: Start relationship from selected topic",
+      checkCallback: (checking) => {
+        const view = this.getActiveMindMapView();
+        if (!view || !view.canStartRelationshipFromSelectedNode()) {
+          return false;
+        }
+
+        if (!checking) {
+          view.startRelationshipFromSelectedNode();
+        }
+        return true;
+      },
+    });
+
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
         if (file instanceof TFile) {
@@ -249,6 +268,7 @@ export default class ObsidianXMindPlugin extends Plugin {
       this.app.vault.on("rename", (file, oldPath) => {
         if (file instanceof TFile) {
           void this.migrateLayoutBucket(oldPath, file.path);
+          void this.migrateAssociationBucket(oldPath, file.path);
           void this.notifyViewsOfRenamedFile(file, oldPath);
         }
       }),
@@ -285,6 +305,10 @@ export default class ObsidianXMindPlugin extends Plugin {
     return { ...(this.layoutByFile[filePath] ?? {}) };
   }
 
+  getAssociationsForFile(filePath: string): MindMapAssociation[] {
+    return cloneAssociations(this.associationsByFile[filePath] ?? []);
+  }
+
   getAppearanceSettings(): AppearanceSettings {
     return { ...this.appearanceSettings };
   }
@@ -319,6 +343,19 @@ export default class ObsidianXMindPlugin extends Plugin {
       delete this.layoutByFile[filePath];
     } else {
       this.layoutByFile[filePath] = { ...layout };
+    }
+
+    await this.persistPluginData();
+  }
+
+  async setAssociationsForFile(
+    filePath: string,
+    associations: MindMapAssociation[],
+  ): Promise<void> {
+    if (associations.length === 0) {
+      delete this.associationsByFile[filePath];
+    } else {
+      this.associationsByFile[filePath] = cloneAssociations(associations);
     }
 
     await this.persistPluginData();
@@ -463,9 +500,25 @@ export default class ObsidianXMindPlugin extends Plugin {
     await this.persistPluginData();
   }
 
+  private async migrateAssociationBucket(oldPath: string, newPath: string): Promise<void> {
+    if (oldPath === newPath) {
+      return;
+    }
+
+    const current = this.associationsByFile[oldPath];
+    if (!current) {
+      return;
+    }
+
+    this.associationsByFile[newPath] = current;
+    delete this.associationsByFile[oldPath];
+    await this.persistPluginData();
+  }
+
   private async persistPluginData(): Promise<void> {
     await this.saveData({
       layoutByFile: this.layoutByFile,
+      associationsByFile: this.associationsByFile,
       appearance: this.appearanceSettings,
     } satisfies PluginData);
   }
@@ -527,4 +580,116 @@ function normalizeAppearanceSettings(
     connectionStyle:
       value?.connectionStyle ?? DEFAULT_APPEARANCE_SETTINGS.connectionStyle,
   };
+}
+
+function normalizeAssociationStore(
+  value: PluginData["associationsByFile"],
+): Record<string, MindMapAssociation[]> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  const next: Record<string, MindMapAssociation[]> = {};
+
+  for (const [filePath, associations] of Object.entries(value)) {
+    if (!Array.isArray(associations) || associations.length === 0) {
+      continue;
+    }
+
+    const normalized: MindMapAssociation[] = [];
+    for (const association of associations) {
+      if (
+        !association ||
+        typeof association !== "object" ||
+        typeof association.id !== "string" ||
+        !isValidAssociationEndpoint(association.from) ||
+        !isValidAssociationEndpoint(association.to)
+      ) {
+        continue;
+      }
+
+      normalized.push({
+        id: association.id,
+        from: {
+          nodeId: association.from.nodeId,
+          locator: {
+            kind: association.from.locator.kind,
+            text: association.from.locator.text,
+            depth: association.from.locator.depth,
+            ancestorTexts: [...association.from.locator.ancestorTexts],
+            siblingIndex: association.from.locator.siblingIndex,
+            subtreeSignature: association.from.locator.subtreeSignature,
+          },
+        },
+        to: {
+          nodeId: association.to.nodeId,
+          locator: {
+            kind: association.to.locator.kind,
+            text: association.to.locator.text,
+            depth: association.to.locator.depth,
+            ancestorTexts: [...association.to.locator.ancestorTexts],
+            siblingIndex: association.to.locator.siblingIndex,
+            subtreeSignature: association.to.locator.subtreeSignature,
+          },
+        },
+      });
+    }
+
+    if (normalized.length > 0) {
+      next[filePath] = normalized;
+    }
+  }
+
+  return next;
+}
+
+function cloneAssociations(
+  associations: MindMapAssociation[],
+): MindMapAssociation[] {
+  return associations.map((association) => ({
+    id: association.id,
+    from: {
+      nodeId: association.from.nodeId,
+      locator: {
+        kind: association.from.locator.kind,
+        text: association.from.locator.text,
+        depth: association.from.locator.depth,
+        ancestorTexts: [...association.from.locator.ancestorTexts],
+        siblingIndex: association.from.locator.siblingIndex,
+        subtreeSignature: association.from.locator.subtreeSignature,
+      },
+    },
+    to: {
+      nodeId: association.to.nodeId,
+      locator: {
+        kind: association.to.locator.kind,
+        text: association.to.locator.text,
+        depth: association.to.locator.depth,
+        ancestorTexts: [...association.to.locator.ancestorTexts],
+        siblingIndex: association.to.locator.siblingIndex,
+        subtreeSignature: association.to.locator.subtreeSignature,
+      },
+    },
+  }));
+}
+
+function isValidAssociationEndpoint(
+  value: unknown,
+): value is MindMapAssociation["from"] {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const endpoint = value as MindMapAssociation["from"];
+  return (
+    typeof endpoint.nodeId === "string" &&
+    !!endpoint.locator &&
+    typeof endpoint.locator.kind === "string" &&
+    typeof endpoint.locator.text === "string" &&
+    Number.isInteger(endpoint.locator.depth) &&
+    Array.isArray(endpoint.locator.ancestorTexts) &&
+    endpoint.locator.ancestorTexts.every((item) => typeof item === "string") &&
+    Number.isInteger(endpoint.locator.siblingIndex) &&
+    typeof endpoint.locator.subtreeSignature === "string"
+  );
 }

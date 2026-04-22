@@ -2,6 +2,7 @@ export type NodeKind = "virtual-root" | "heading" | "overflow-list" | "linked-no
 export type MindMapBackgroundStyle = "plain" | "grid" | "dots" | "aurora";
 export type MindMapNodeShape = "pill" | "rounded" | "soft-square";
 export type MindMapConnectionStyle = "curved" | "angled" | "straight";
+export type MindMapAssociationEndpointKind = Exclude<NodeKind, "virtual-root">;
 
 export interface SourceDocumentRef {
   path: string;
@@ -100,5 +101,26 @@ export interface AppearanceSettings {
 
 export interface PluginData {
   layoutByFile?: Record<string, Record<string, NodeLayoutOffset>>;
+  associationsByFile?: Record<string, MindMapAssociation[]>;
   appearance?: Partial<AppearanceSettings>;
+}
+
+export interface MindMapNodeLocator {
+  kind: MindMapAssociationEndpointKind;
+  text: string;
+  depth: number;
+  ancestorTexts: string[];
+  siblingIndex: number;
+  subtreeSignature: string;
+}
+
+export interface MindMapAssociationEndpoint {
+  nodeId: string;
+  locator: MindMapNodeLocator;
+}
+
+export interface MindMapAssociation {
+  id: string;
+  from: MindMapAssociationEndpoint;
+  to: MindMapAssociationEndpoint;
 }

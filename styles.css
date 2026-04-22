@@ -95,7 +95,7 @@
   left: 0;
   top: 0;
   overflow: visible;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .oxm-line {
@@ -104,6 +104,7 @@
   stroke-width: 2.25;
   stroke-linecap: round;
   stroke-linejoin: round;
+  pointer-events: none;
 }
 
 .oxm-preview-line {
@@ -114,6 +115,29 @@
   stroke-linejoin: round;
   stroke-dasharray: 5 6;
   opacity: 0.95;
+  pointer-events: none;
+}
+
+.oxm-association {
+  fill: none;
+  stroke: color-mix(in srgb, #f4a949 72%, var(--text-accent) 18%);
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 9 7;
+  opacity: 0.92;
+  pointer-events: stroke;
+  transition:
+    stroke 140ms ease,
+    stroke-width 140ms ease,
+    opacity 140ms ease;
+}
+
+.oxm-association:hover,
+.oxm-association.is-selected {
+  stroke: color-mix(in srgb, #f39c28 82%, white 8%);
+  stroke-width: 3;
+  opacity: 1;
 }
 
 .oxm-nodes {
@@ -166,6 +190,13 @@
   border-color: color-mix(in srgb, var(--text-accent) 64%, white 8%);
   box-shadow:
     0 0 0 4px color-mix(in srgb, var(--text-accent) 12%, transparent),
+    0 18px 36px rgba(15, 23, 42, 0.09);
+}
+
+.oxm-node.is-association-source {
+  border-color: color-mix(in srgb, #f4a949 62%, var(--text-accent) 12%);
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, #f4a949 14%, transparent),
     0 18px 36px rgba(15, 23, 42, 0.09);
 }
 

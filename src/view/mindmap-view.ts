@@ -1,4 +1,11 @@
 import {
+  associationsEqual,
+  buildAssociationEndpoint,
+  cloneAssociations,
+  createAssociationId,
+  reconcileAssociations,
+} from "../associations";
+import {
   ItemView,
   Menu,
   Modal,
@@ -19,6 +26,7 @@ import {
 import { layoutMindMap } from "../layout/tree-layout";
 import { parseMarkdownToMindMap } from "../parser/markdown-parser";
 import type {
+  MindMapAssociation,
   MindMapDocument,
   MindMapInlineToken,
   MindMapLayout,
@@ -82,6 +90,8 @@ interface UndoHistoryEntry {
   afterContent: string;
   beforeLayout: Record<string, NodeLayoutOffset>;
   afterLayout: Record<string, NodeLayoutOffset>;
+  beforeAssociations: MindMapAssociation[];
+  afterAssociations: MindMapAssociation[];
   restoreSelectionNodeId: string | null;
 }
 
@@ -103,21 +113,31 @@ interface DropPreviewState {
   position: MoveNodePosition;
 }
 
+interface RenderedAssociation {
+  association: MindMapAssociation;
+  fromNode: MindMapNode;
+  toNode: MindMapNode;
+  path: string;
+}
+
 export class MindMapView extends ItemView {
   private plugin: ObsidianXMindPlugin;
   private file: TFile | null = null;
   private parsed: MindMapDocument | null = null;
   private elements: ViewElements | null = null;
   private selectedNodeId: string | null = null;
+  private selectedAssociationId: string | null = null;
   private editingNodeId: string | null = null;
   private editorInput: HTMLInputElement | null = null;
   private pendingSelection: PendingSelectionState | null = null;
   private undoHistory: UndoHistoryEntry[] = [];
   private undoBarDismissed = false;
   private nodeLayoutOffsets: Record<string, NodeLayoutOffset> = {};
+  private associations: MindMapAssociation[] = [];
   private lastRenderedLayout: MindMapLayout | null = null;
   private nodeDragState: NodeDragState | null = null;
   private dropPreview: DropPreviewState | null = null;
+  private pendingAssociationSourceNodeId: string | null = null;
   private pendingEditOnClickNodeId: string | null = null;
   private editingSeedText: string | null = null;
   private isEditorComposing = false;
@@ -224,13 +244,16 @@ export class MindMapView extends ItemView {
     if (!this.file) {
       this.parsed = null;
       this.selectedNodeId = null;
+      this.selectedAssociationId = null;
       this.undoHistory = [];
       this.undoBarDismissed = false;
       this.clearUndoBarTimeout();
       this.nodeLayoutOffsets = {};
+      this.associations = [];
       this.lastRenderedLayout = null;
       this.nodeDragState = null;
       this.dropPreview = null;
+      this.pendingAssociationSourceNodeId = null;
       this.endEditing(false);
       this.render();
       this.renderUndoBar();
@@ -262,6 +285,7 @@ export class MindMapView extends ItemView {
     }
 
     this.nodeLayoutOffsets = this.plugin.getLayoutForFile(this.file.path);
+    const storedAssociations = this.plugin.getAssociationsForFile(this.file.path);
     const validNodeIds = new Set(parsed.nodesById.keys());
     let pruned = false;
     for (const nodeId of Object.keys(this.nodeLayoutOffsets)) {
@@ -274,13 +298,20 @@ export class MindMapView extends ItemView {
       void this.plugin.setLayoutForFile(this.file.path, this.nodeLayoutOffsets);
     }
 
+    const associationReconcile = reconcileAssociations(parsed, storedAssociations);
+    this.associations = associationReconcile.associations;
+    if (associationReconcile.changed) {
+      void this.plugin.setAssociationsForFile(this.file.path, associationReconcile.associations);
+    }
+
     const latestUndo = this.undoHistory[this.undoHistory.length - 1];
     if (
       !this.isApplyingLocalChange &&
       latestUndo &&
       (latestUndo.filePath !== this.file.path ||
         latestUndo.afterContent !== content ||
-        !layoutOffsetsEqual(latestUndo.afterLayout, this.nodeLayoutOffsets))
+        !layoutOffsetsEqual(latestUndo.afterLayout, this.nodeLayoutOffsets) ||
+        !associationsEqual(latestUndo.afterAssociations, this.associations))
     ) {
       this.undoHistory = [];
       this.undoBarDismissed = false;
@@ -293,6 +324,18 @@ export class MindMapView extends ItemView {
     }
     if (!this.selectedNodeId || !parsed.nodesById.has(this.selectedNodeId)) {
       this.selectedNodeId = parsed.root.id;
+    }
+    if (
+      this.selectedAssociationId &&
+      !this.associations.some((association) => association.id === this.selectedAssociationId)
+    ) {
+      this.selectedAssociationId = null;
+    }
+    if (
+      this.pendingAssociationSourceNodeId &&
+      !parsed.nodesById.has(this.pendingAssociationSourceNodeId)
+    ) {
+      this.pendingAssociationSourceNodeId = null;
     }
     this.render();
     this.renderUndoBar();
@@ -382,6 +425,33 @@ export class MindMapView extends ItemView {
     );
   }
 
+  canStartRelationshipFromSelectedNode(): boolean {
+    if (
+      !this.file ||
+      !this.parsed ||
+      !this.selectedNodeId ||
+      this.editingNodeId ||
+      this.hasTextInputFocus()
+    ) {
+      return false;
+    }
+
+    const node = this.parsed.nodesById.get(this.selectedNodeId);
+    return !!node && node.source.kind !== "virtual-root";
+  }
+
+  startRelationshipFromSelectedNode(): void {
+    if (!this.canStartRelationshipFromSelectedNode() || !this.selectedNodeId) {
+      return;
+    }
+
+    this.selectedAssociationId = null;
+    this.pendingAssociationSourceNodeId = this.selectedNodeId;
+    this.contentEl.focus();
+    this.render();
+    new Notice("Select another topic to create a relationship.");
+  }
+
   navigateSelection(direction: "left" | "right" | "up" | "down"): void {
     if (!this.parsed || !this.selectedNodeId || !this.lastRenderedLayout) {
       return;
@@ -466,9 +536,11 @@ export class MindMapView extends ItemView {
     try {
       const currentContent = await this.app.vault.read(this.file);
       const currentLayout = this.plugin.getLayoutForFile(this.file.path);
+      const currentAssociations = this.plugin.getAssociationsForFile(this.file.path);
       if (
         currentContent !== entry.afterContent ||
-        !layoutOffsetsEqual(currentLayout, entry.afterLayout)
+        !layoutOffsetsEqual(currentLayout, entry.afterLayout) ||
+        !associationsEqual(currentAssociations, entry.afterAssociations)
       ) {
         this.undoHistory = [];
         this.undoBarDismissed = false;
@@ -491,7 +563,9 @@ export class MindMapView extends ItemView {
       this.undoBarDismissed = true;
       this.clearUndoBarTimeout();
       this.nodeLayoutOffsets = cloneLayoutOffsets(entry.beforeLayout);
+      this.associations = cloneAssociations(entry.beforeAssociations);
       await this.plugin.setLayoutForFile(this.file.path, entry.beforeLayout);
+      await this.plugin.setAssociationsForFile(this.file.path, entry.beforeAssociations);
       await this.app.vault.modify(this.file, entry.beforeContent);
       await this.refresh();
     } catch {
@@ -772,6 +846,39 @@ export class MindMapView extends ItemView {
       svg.append(path);
     }
 
+    for (const association of this.getRenderedAssociations(layout)) {
+      const path = document.createElementNS(SVG_NS, "path");
+      path.setAttribute("d", association.path);
+      path.classList.add("oxm-association");
+      if (association.association.id === this.selectedAssociationId) {
+        path.classList.add("is-selected");
+      }
+      path.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      path.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.selectedAssociationId = association.association.id;
+        this.selectedNodeId = null;
+        this.pendingAssociationSourceNodeId = null;
+        this.contentEl.focus();
+        this.render();
+      });
+      path.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.selectedAssociationId = association.association.id;
+        this.selectedNodeId = null;
+        this.pendingAssociationSourceNodeId = null;
+        this.contentEl.focus();
+        this.render();
+        this.openAssociationContextMenu(event, association.association);
+      });
+      svg.append(path);
+    }
+
     const dropPreviewElements = this.renderDropPreview(layout);
     if (dropPreviewElements) {
       svg.append(...dropPreviewElements.svg);
@@ -802,6 +909,10 @@ export class MindMapView extends ItemView {
 
     if (node.id === this.selectedNodeId && !isEditing) {
       nodeEl.classList.add("is-selected");
+    }
+
+    if (node.id === this.pendingAssociationSourceNodeId) {
+      nodeEl.classList.add("is-association-source");
     }
 
     if (positioned.depth === 0) {
@@ -913,6 +1024,16 @@ export class MindMapView extends ItemView {
         return;
       }
 
+      if (
+        this.pendingAssociationSourceNodeId &&
+        this.pendingAssociationSourceNodeId !== node.id
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.createAssociation(this.pendingAssociationSourceNodeId, node.id);
+        return;
+      }
+
       if (this.pendingEditOnClickNodeId === node.id) {
         this.pendingEditOnClickNodeId = null;
         this.render();
@@ -997,6 +1118,8 @@ export class MindMapView extends ItemView {
     }
 
     this.selectedNodeId = nodeId;
+    this.selectedAssociationId = null;
+    this.pendingAssociationSourceNodeId = null;
     this.editingNodeId = nodeId;
     this.editingSeedText = seedText;
     this.render();
@@ -1114,10 +1237,20 @@ export class MindMapView extends ItemView {
     }
 
     const wasSelected = this.selectedNodeId === nodeId;
+    this.selectedAssociationId = null;
     this.pendingEditOnClickNodeId = wasSelected ? null : nodeId;
     if (!wasSelected) {
       this.selectedNodeId = nodeId;
+      this.selectedAssociationId = null;
       this.contentEl.focus();
+    }
+
+    if (
+      this.pendingAssociationSourceNodeId &&
+      this.pendingAssociationSourceNodeId !== nodeId
+    ) {
+      event.stopPropagation();
+      return;
     }
 
     const positioned = this.lastRenderedLayout.nodes.get(nodeId);
@@ -1204,6 +1337,13 @@ export class MindMapView extends ItemView {
       return;
     }
 
+    if (event.key === "Escape" && this.pendingAssociationSourceNodeId) {
+      event.preventDefault();
+      this.pendingAssociationSourceNodeId = null;
+      this.render();
+      return;
+    }
+
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
       event.preventDefault();
       void this.undoLastAction();
@@ -1223,6 +1363,15 @@ export class MindMapView extends ItemView {
     }
 
     if ((event.metaKey || event.ctrlKey || event.altKey) && event.key !== "Backspace") {
+      return;
+    }
+
+    if (
+      this.selectedAssociationId &&
+      (event.key === "Delete" || event.key === "Backspace")
+    ) {
+      event.preventDefault();
+      void this.deleteAssociation(this.selectedAssociationId);
       return;
     }
 
@@ -1256,6 +1405,7 @@ export class MindMapView extends ItemView {
 
     if (shouldStartTypingEdit(event)) {
       event.preventDefault();
+      this.pendingAssociationSourceNodeId = null;
       this.startEditing(this.selectedNodeId, event.key);
       return;
     }
@@ -1306,6 +1456,7 @@ export class MindMapView extends ItemView {
     }
 
     this.pendingEditOnClickNodeId = null;
+    this.selectedAssociationId = null;
     this.panState = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -1495,11 +1646,19 @@ export class MindMapView extends ItemView {
     try {
       const content = await this.app.vault.read(this.file);
       const operation = buildOperation(sourceRef, content);
+      const beforeAssociations = cloneAssociations(this.associations);
+      const nextParsed = parseMarkdownToMindMap(sourceRef, operation.content);
+      const nextAssociations = reconcileAssociations(nextParsed, beforeAssociations).associations;
       this.pendingSelection = operation.nextSelection
         ? {
             source: operation.nextSelection,
           }
         : null;
+
+      if (!associationsEqual(beforeAssociations, nextAssociations)) {
+        this.associations = cloneAssociations(nextAssociations);
+        await this.plugin.setAssociationsForFile(this.file.path, nextAssociations);
+      }
 
       if (operation.content !== content) {
         const beforeLayout = cloneLayoutOffsets(this.nodeLayoutOffsets);
@@ -1522,6 +1681,22 @@ export class MindMapView extends ItemView {
           afterContent: operation.content,
           beforeLayout,
           afterLayout,
+          beforeAssociations,
+          afterAssociations: nextAssociations,
+          restoreSelectionNodeId: operation.restoreSelectionNodeId,
+        });
+      } else if (!associationsEqual(beforeAssociations, nextAssociations)) {
+        const currentLayout = cloneLayoutOffsets(this.nodeLayoutOffsets);
+        this.pushUndoEntry({
+          filePath: this.file.path,
+          label: operation.label,
+          showBanner: operation.showBanner,
+          beforeContent: content,
+          afterContent: content,
+          beforeLayout: currentLayout,
+          afterLayout: currentLayout,
+          beforeAssociations,
+          afterAssociations: nextAssociations,
           restoreSelectionNodeId: operation.restoreSelectionNodeId,
         });
       }
@@ -1559,6 +1734,60 @@ export class MindMapView extends ItemView {
     const menu = new Menu();
     const hasSource = node.source.kind === "virtual-root" || !!node.source.span;
 
+    if (node.source.kind !== "virtual-root") {
+      menu.addItem((item) => {
+        item
+          .setTitle(
+            this.pendingAssociationSourceNodeId === node.id
+              ? "Cancel relationship"
+              : "Start relationship",
+          )
+          .setIcon("git-merge")
+          .onClick(() => {
+            if (this.pendingAssociationSourceNodeId === node.id) {
+              this.pendingAssociationSourceNodeId = null;
+              this.render();
+              return;
+            }
+
+            this.selectedNodeId = node.id;
+            this.startRelationshipFromSelectedNode();
+          });
+      });
+
+      const nodeAssociationCount = this.associations.filter(
+        (association) => association.from.nodeId === node.id || association.to.nodeId === node.id,
+      ).length;
+      if (nodeAssociationCount > 0) {
+        menu.addItem((item) => {
+          item
+            .setTitle(
+              nodeAssociationCount === 1
+                ? "Delete related association"
+                : `Delete ${nodeAssociationCount} related associations`,
+            )
+            .setIcon("trash")
+            .onClick(() => {
+              void this.deleteAssociationsForNode(node.id);
+            });
+        });
+      }
+
+      if (
+        this.pendingAssociationSourceNodeId &&
+        this.pendingAssociationSourceNodeId !== node.id
+      ) {
+        menu.addItem((item) => {
+          item
+            .setTitle("Create relationship to this topic")
+            .setIcon("plus")
+            .onClick(() => {
+              void this.createAssociation(this.pendingAssociationSourceNodeId!, node.id);
+            });
+        });
+      }
+    }
+
     menu.addItem((item) => {
       item
         .setTitle(
@@ -1574,6 +1803,174 @@ export class MindMapView extends ItemView {
     });
 
     menu.showAtMouseEvent(event);
+  }
+
+  private openAssociationContextMenu(event: MouseEvent, association: MindMapAssociation): void {
+    const menu = new Menu();
+
+    menu.addItem((item) => {
+      item
+        .setTitle("Delete relationship")
+        .setIcon("trash")
+        .onClick(() => {
+          void this.deleteAssociation(association.id);
+        });
+    });
+
+    menu.showAtMouseEvent(event);
+  }
+
+  private getRenderedAssociations(layout: MindMapLayout): RenderedAssociation[] {
+    if (!this.parsed || !this.file) {
+      return [];
+    }
+
+    const rendered: RenderedAssociation[] = [];
+    for (const association of this.associations) {
+      const fromNode = this.parsed.nodesById.get(association.from.nodeId) ?? null;
+      const toNode = this.parsed.nodesById.get(association.to.nodeId) ?? null;
+      if (!fromNode || !toNode || fromNode.id === toNode.id) {
+        continue;
+      }
+
+      const fromPositioned = layout.nodes.get(fromNode.id);
+      const toPositioned = layout.nodes.get(toNode.id);
+      if (!fromPositioned || !toPositioned) {
+        continue;
+      }
+
+      rendered.push({
+        association,
+        fromNode,
+        toNode,
+        path: buildAssociationPath(fromPositioned, toPositioned),
+      });
+    }
+
+    return rendered;
+  }
+
+  private async createAssociation(fromNodeId: string, toNodeId: string): Promise<void> {
+    if (!this.file || !this.parsed || fromNodeId === toNodeId) {
+      this.pendingAssociationSourceNodeId = null;
+      this.render();
+      return;
+    }
+
+    const from = buildAssociationEndpoint(this.parsed, fromNodeId);
+    const to = buildAssociationEndpoint(this.parsed, toNodeId);
+    if (!from || !to) {
+      this.pendingAssociationSourceNodeId = null;
+      this.render();
+      return;
+    }
+
+    const existing = this.associations.some(
+      (association) =>
+        (association.from.nodeId === from.nodeId && association.to.nodeId === to.nodeId) ||
+        (association.from.nodeId === to.nodeId && association.to.nodeId === from.nodeId),
+    );
+    if (existing) {
+      this.pendingAssociationSourceNodeId = null;
+      this.selectedAssociationId = null;
+      this.selectedNodeId = to.nodeId;
+      this.render();
+      new Notice("These topics are already related.");
+      return;
+    }
+
+    const beforeAssociations = cloneAssociations(this.associations);
+    const nextAssociations = cloneAssociations(this.associations);
+    nextAssociations.push({
+      id: createAssociationId(),
+      from,
+      to,
+    });
+
+    const reconciled = reconcileAssociations(this.parsed, nextAssociations).associations;
+    const content = await this.app.vault.read(this.file);
+    await this.plugin.setAssociationsForFile(this.file.path, reconciled);
+    this.associations = cloneAssociations(reconciled);
+    this.pendingAssociationSourceNodeId = null;
+    this.selectedAssociationId = reconciled[reconciled.length - 1]?.id ?? null;
+    this.selectedNodeId = null;
+    this.pushUndoEntry({
+      filePath: this.file.path,
+      label: "Created relationship",
+      showBanner: false,
+      beforeContent: content,
+      afterContent: content,
+      beforeLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+      afterLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+      beforeAssociations,
+      afterAssociations: reconciled,
+      restoreSelectionNodeId: fromNodeId,
+    });
+    this.render();
+  }
+
+  private async deleteAssociation(associationId: string): Promise<void> {
+    if (!this.file) {
+      return;
+    }
+
+    const beforeAssociations = cloneAssociations(this.associations);
+    const nextAssociations = beforeAssociations.filter(
+      (association) => association.id !== associationId,
+    );
+    if (nextAssociations.length === beforeAssociations.length) {
+      return;
+    }
+
+    const content = await this.app.vault.read(this.file);
+    await this.plugin.setAssociationsForFile(this.file.path, nextAssociations);
+    this.associations = cloneAssociations(nextAssociations);
+    this.selectedAssociationId = null;
+    this.pushUndoEntry({
+      filePath: this.file.path,
+      label: "Deleted relationship",
+      showBanner: false,
+      beforeContent: content,
+      afterContent: content,
+      beforeLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+      afterLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+      beforeAssociations,
+      afterAssociations: nextAssociations,
+      restoreSelectionNodeId: this.selectedNodeId,
+    });
+    this.render();
+  }
+
+  private async deleteAssociationsForNode(nodeId: string): Promise<void> {
+    if (!this.file) {
+      return;
+    }
+
+    const beforeAssociations = cloneAssociations(this.associations);
+    const nextAssociations = beforeAssociations.filter(
+      (association) => association.from.nodeId !== nodeId && association.to.nodeId !== nodeId,
+    );
+    if (nextAssociations.length === beforeAssociations.length) {
+      return;
+    }
+
+    const content = await this.app.vault.read(this.file);
+    await this.plugin.setAssociationsForFile(this.file.path, nextAssociations);
+    this.associations = cloneAssociations(nextAssociations);
+    this.selectedAssociationId = null;
+    this.pushUndoEntry({
+      filePath: this.file.path,
+      label: "Deleted related relationships",
+      showBanner: false,
+      beforeContent: content,
+      afterContent: content,
+      beforeLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+      afterLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+      beforeAssociations,
+      afterAssociations: nextAssociations,
+      restoreSelectionNodeId: nodeId,
+    });
+    this.render();
   }
 
   private computeDropPreview(event: PointerEvent): DropPreviewState | null {
@@ -1701,6 +2098,8 @@ export class MindMapView extends ItemView {
         afterContent: content,
         beforeLayout,
         afterLayout,
+        beforeAssociations: cloneAssociations(this.associations),
+        afterAssociations: cloneAssociations(this.associations),
         restoreSelectionNodeId: anchorNodeId,
       });
       this.render();
@@ -1719,6 +2118,8 @@ export class MindMapView extends ItemView {
       ...entry,
       beforeLayout: cloneLayoutOffsets(entry.beforeLayout),
       afterLayout: cloneLayoutOffsets(entry.afterLayout),
+      beforeAssociations: cloneAssociations(entry.beforeAssociations),
+      afterAssociations: cloneAssociations(entry.afterAssociations),
     });
     if (this.undoHistory.length > 50) {
       this.undoHistory.shift();
@@ -1842,6 +2243,47 @@ function buildPreviewCurve(
   const curve = Math.max(26, delta * 0.34);
   const direction = endX >= startX ? 1 : -1;
   return `M ${startX} ${startY} C ${startX + curve * direction} ${startY}, ${endX - curve * direction} ${endY}, ${endX} ${endY}`;
+}
+
+function buildAssociationPath(
+  from: PositionedMindMapNode,
+  to: PositionedMindMapNode,
+): string {
+  const fromCenterX = from.x + from.width / 2;
+  const fromCenterY = from.y + from.height / 2;
+  const toCenterX = to.x + to.width / 2;
+  const toCenterY = to.y + to.height / 2;
+
+  let startX = from.x + from.width;
+  let startY = fromCenterY;
+  let endX = to.x;
+  let endY = toCenterY;
+
+  if (to.x + to.width < from.x) {
+    startX = from.x;
+    endX = to.x + to.width;
+  } else if (
+    Math.abs(fromCenterX - toCenterX) < Math.max(from.width, to.width) * 0.55
+  ) {
+    const fromBelow = fromCenterY <= toCenterY;
+    startX = fromCenterX;
+    endX = toCenterX;
+    startY = fromBelow ? from.y + from.height : from.y;
+    endY = fromBelow ? to.y : to.y + to.height;
+  }
+
+  const deltaX = endX - startX;
+  const deltaY = endY - startY;
+  const controlX = Math.max(36, Math.abs(deltaX) * 0.34);
+  const controlY = Math.max(18, Math.abs(deltaY) * 0.22);
+
+  if (Math.abs(deltaX) >= Math.abs(deltaY)) {
+    const direction = deltaX >= 0 ? 1 : -1;
+    return `M ${startX} ${startY} C ${startX + controlX * direction} ${startY}, ${endX - controlX * direction} ${endY}, ${endX} ${endY}`;
+  }
+
+  const verticalDirection = deltaY >= 0 ? 1 : -1;
+  return `M ${startX} ${startY} C ${startX} ${startY + controlY * verticalDirection}, ${endX} ${endY - controlY * verticalDirection}, ${endX} ${endY}`;
 }
 
 function getVisibleNodesByVisualOrder(
