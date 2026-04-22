@@ -291,12 +291,19 @@ export class MindMapView extends ItemView {
       !!this.file &&
       !this.editingNodeId &&
       !this.isCommittingEdit &&
+      !this.hasTextInputFocus() &&
       this.undoHistory.length > 0
     );
   }
 
   canCopySelectedNode(): boolean {
-    if (!this.file || !this.parsed || this.editingNodeId || !this.selectedNodeId) {
+    if (
+      !this.file ||
+      !this.parsed ||
+      this.editingNodeId ||
+      !this.selectedNodeId ||
+      this.hasTextInputFocus()
+    ) {
       return false;
     }
 
@@ -305,7 +312,13 @@ export class MindMapView extends ItemView {
   }
 
   canPasteAfterSelectedNode(): boolean {
-    if (!this.file || !this.parsed || this.editingNodeId || !this.selectedNodeId) {
+    if (
+      !this.file ||
+      !this.parsed ||
+      this.editingNodeId ||
+      !this.selectedNodeId ||
+      this.hasTextInputFocus()
+    ) {
       return false;
     }
 
@@ -318,7 +331,13 @@ export class MindMapView extends ItemView {
   }
 
   canDeleteSelectedNode(): boolean {
-    if (!this.file || !this.parsed || this.editingNodeId || !this.selectedNodeId) {
+    if (
+      !this.file ||
+      !this.parsed ||
+      this.editingNodeId ||
+      !this.selectedNodeId ||
+      this.hasTextInputFocus()
+    ) {
       return false;
     }
 
@@ -339,6 +358,7 @@ export class MindMapView extends ItemView {
       !!this.parsed &&
       !!this.selectedNodeId &&
       !this.editingNodeId &&
+      !this.hasTextInputFocus() &&
       !!this.lastRenderedLayout
     );
   }
@@ -1320,12 +1340,12 @@ export class MindMapView extends ItemView {
       const beforeLayout = cloneLayoutOffsets(this.nodeDragState.beforeLayout);
       this.nodeDragState = null;
       this.dropPreview = null;
-      this.pendingEditOnClickNodeId = null;
       if (this.elements?.surface.hasPointerCapture(event.pointerId)) {
         this.elements.surface.releasePointerCapture(event.pointerId);
       }
 
       if (didDrag) {
+        this.pendingEditOnClickNodeId = null;
         this.suppressNextNodeClick = true;
         if (dropPreview) {
           void this.applyDragMove(anchorNodeId, dropPreview, beforeLayout);
@@ -1721,6 +1741,20 @@ export class MindMapView extends ItemView {
       window.clearTimeout(this.undoBarTimeout);
       this.undoBarTimeout = null;
     }
+  }
+
+  private hasTextInputFocus(): boolean {
+    const activeElement = document.activeElement;
+    if (!activeElement) {
+      return false;
+    }
+
+    return (
+      activeElement instanceof HTMLInputElement ||
+      activeElement instanceof HTMLTextAreaElement ||
+      activeElement instanceof HTMLSelectElement ||
+      (activeElement instanceof HTMLElement && activeElement.isContentEditable)
+    );
   }
 
   private async writeClipboardPreview(copied: CopiedMindMapSubtree): Promise<void> {
