@@ -65,12 +65,14 @@ interface PendingSelectionState {
       };
 }
 
-interface DeletedNodeUndoState {
+interface UndoHistoryEntry {
+  filePath: string;
+  label: string;
   beforeContent: string;
   afterContent: string;
-  deletedNodeId: string;
-  deletedLabel: string;
-  deletedDescendantCount: number;
+  beforeLayout: Record<string, NodeLayoutOffset>;
+  afterLayout: Record<string, NodeLayoutOffset>;
+  restoreSelectionNodeId: string | null;
 }
 
 interface NodeDragState {
@@ -81,6 +83,7 @@ interface NodeDragState {
   startClientY: number;
   startAnchorX: number;
   startAnchorY: number;
+  beforeLayout: Record<string, NodeLayoutOffset>;
   initialOffsets: Record<string, NodeLayoutOffset>;
   didDrag: boolean;
 }
@@ -99,13 +102,16 @@ export class MindMapView extends ItemView {
   private editingNodeId: string | null = null;
   private editorInput: HTMLInputElement | null = null;
   private pendingSelection: PendingSelectionState | null = null;
-  private lastDeletedNodeUndo: DeletedNodeUndoState | null = null;
+  private undoHistory: UndoHistoryEntry[] = [];
+  private undoBarDismissed = false;
   private nodeLayoutOffsets: Record<string, NodeLayoutOffset> = {};
   private lastRenderedLayout: MindMapLayout | null = null;
   private nodeDragState: NodeDragState | null = null;
   private dropPreview: DropPreviewState | null = null;
   private suppressNextNodeClick = false;
   private isCommittingEdit = false;
+  private isApplyingLocalChange = false;
+  private isUndoing = false;
   private viewport = { ...DEFAULT_VIEWPORT };
   private panState:
     | {
@@ -190,12 +196,15 @@ export class MindMapView extends ItemView {
     if (!this.file) {
       this.parsed = null;
       this.selectedNodeId = null;
+      this.undoHistory = [];
+      this.undoBarDismissed = false;
       this.nodeLayoutOffsets = {};
       this.lastRenderedLayout = null;
       this.nodeDragState = null;
       this.dropPreview = null;
       this.endEditing(false);
       this.render();
+      this.renderUndoBar();
       return;
     }
 
@@ -209,9 +218,6 @@ export class MindMapView extends ItemView {
     }
 
     const content = await this.app.vault.read(this.file);
-    if (this.lastDeletedNodeUndo && this.lastDeletedNodeUndo.afterContent !== content) {
-      this.lastDeletedNodeUndo = null;
-    }
     const parsed = parseMarkdownToMindMap(
       {
         path: this.file.path,
@@ -239,6 +245,18 @@ export class MindMapView extends ItemView {
       void this.plugin.setLayoutForFile(this.file.path, this.nodeLayoutOffsets);
     }
 
+    const latestUndo = this.undoHistory[this.undoHistory.length - 1];
+    if (
+      !this.isApplyingLocalChange &&
+      latestUndo &&
+      (latestUndo.filePath !== this.file.path ||
+        latestUndo.afterContent !== content ||
+        !layoutOffsetsEqual(latestUndo.afterLayout, this.nodeLayoutOffsets))
+    ) {
+      this.undoHistory = [];
+      this.undoBarDismissed = false;
+    }
+
     this.parsed = parsed;
     this.endEditing(false);
     if (this.pendingSelection) {
@@ -256,6 +274,68 @@ export class MindMapView extends ItemView {
       return;
     }
     this.startEditing(this.selectedNodeId);
+  }
+
+  canUndoLastAction(): boolean {
+    return (
+      !!this.file &&
+      !this.editingNodeId &&
+      !this.isCommittingEdit &&
+      this.undoHistory.length > 0
+    );
+  }
+
+  async undoLastAction(): Promise<void> {
+    if (!this.file) {
+      return;
+    }
+
+    const entry = this.undoHistory[this.undoHistory.length - 1];
+    if (!entry) {
+      return;
+    }
+
+    if (entry.filePath !== this.file.path) {
+      this.undoHistory = [];
+      this.undoBarDismissed = false;
+      this.renderUndoBar();
+      return;
+    }
+
+    try {
+      const currentContent = await this.app.vault.read(this.file);
+      const currentLayout = this.plugin.getLayoutForFile(this.file.path);
+      if (
+        currentContent !== entry.afterContent ||
+        !layoutOffsetsEqual(currentLayout, entry.afterLayout)
+      ) {
+        this.undoHistory = [];
+        this.undoBarDismissed = false;
+        this.renderUndoBar();
+        new Notice("Undo is no longer available because the mind map changed.");
+        return;
+      }
+
+      this.isUndoing = true;
+      this.pendingSelection = entry.restoreSelectionNodeId
+        ? {
+            source: {
+              type: "node-id",
+              nodeId: entry.restoreSelectionNodeId,
+            },
+          }
+        : null;
+      this.undoHistory.pop();
+      this.undoBarDismissed = false;
+      this.nodeLayoutOffsets = cloneLayoutOffsets(entry.beforeLayout);
+      await this.plugin.setLayoutForFile(this.file.path, entry.beforeLayout);
+      await this.app.vault.modify(this.file, entry.beforeContent);
+      await this.refresh();
+    } catch {
+      new Notice("Failed to undo the last mind map change.");
+    } finally {
+      this.isUndoing = false;
+    }
   }
 
   async addSiblingNode(): Promise<void> {
@@ -309,16 +389,11 @@ export class MindMapView extends ItemView {
       }
     }
 
+    this.isApplyingLocalChange = true;
+
     try {
       const content = await this.app.vault.read(this.file);
       const nextContent = deleteNode(content, this.parsed, node);
-      this.lastDeletedNodeUndo = {
-        beforeContent: content,
-        afterContent: nextContent,
-        deletedNodeId: node.id,
-        deletedLabel: node.label || node.text,
-        deletedDescendantCount: descendantCount,
-      };
       this.pendingSelection = parent
         ? {
             source: {
@@ -328,7 +403,19 @@ export class MindMapView extends ItemView {
           }
         : null;
       if (nextContent !== content) {
+        const beforeLayout = cloneLayoutOffsets(this.nodeLayoutOffsets);
         await this.app.vault.modify(this.file, nextContent);
+        this.nodeLayoutOffsets = {};
+        await this.plugin.setLayoutForFile(this.file.path, {});
+        this.pushUndoEntry({
+          filePath: this.file.path,
+          label: `Deleted “${node.label || node.text}”`,
+          beforeContent: content,
+          afterContent: nextContent,
+          beforeLayout,
+          afterLayout: {},
+          restoreSelectionNodeId: node.id,
+        });
       }
       await this.refresh();
     } catch (error) {
@@ -341,6 +428,8 @@ export class MindMapView extends ItemView {
       }
 
       new Notice("Failed to delete the selected topic.");
+    } finally {
+      this.isApplyingLocalChange = false;
     }
   }
 
@@ -392,7 +481,7 @@ export class MindMapView extends ItemView {
     undoAction.type = "button";
     undoAction.textContent = "Undo";
     undoAction.addEventListener("click", () => {
-      void this.undoLastDeletion();
+      void this.undoLastAction();
     });
 
     const undoDismiss = document.createElement("button");
@@ -401,7 +490,7 @@ export class MindMapView extends ItemView {
     undoDismiss.setAttribute("aria-label", "Dismiss undo banner");
     undoDismiss.textContent = "×";
     undoDismiss.addEventListener("click", () => {
-      this.lastDeletedNodeUndo = null;
+      this.undoBarDismissed = true;
       this.renderUndoBar();
     });
 
@@ -805,6 +894,7 @@ export class MindMapView extends ItemView {
       startClientY: event.clientY,
       startAnchorX: positioned.x,
       startAnchorY: positioned.y,
+      beforeLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
       initialOffsets,
       didDrag: false,
     };
@@ -822,6 +912,7 @@ export class MindMapView extends ItemView {
     }
 
     this.isCommittingEdit = true;
+    this.isApplyingLocalChange = true;
     const nextTitle = this.editorInput.value;
     const node = this.parsed.nodesById.get(this.editingNodeId);
 
@@ -836,8 +927,16 @@ export class MindMapView extends ItemView {
       const nextContent = patchNodeTitle(content, node, nextTitle);
       this.endEditing(false);
       if (nextContent !== content) {
-        this.lastDeletedNodeUndo = null;
         await this.app.vault.modify(this.file, nextContent);
+        this.pushUndoEntry({
+          filePath: this.file.path,
+          label: `Renamed “${node.label || node.text}”`,
+          beforeContent: content,
+          afterContent: nextContent,
+          beforeLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+          afterLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+          restoreSelectionNodeId: node.id,
+        });
       }
       await this.refresh();
     } catch (error) {
@@ -855,6 +954,7 @@ export class MindMapView extends ItemView {
         this.render();
       }
     } finally {
+      this.isApplyingLocalChange = false;
       this.isCommittingEdit = false;
     }
   }
@@ -869,12 +969,6 @@ export class MindMapView extends ItemView {
 
   private onKeyDown(event: KeyboardEvent): void {
     if (this.editingNodeId) {
-      return;
-    }
-
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
-      event.preventDefault();
-      void this.undoLastDeletion();
       return;
     }
 
@@ -972,6 +1066,7 @@ export class MindMapView extends ItemView {
       const didDrag = this.nodeDragState.didDrag;
       const dropPreview = this.dropPreview;
       const anchorNodeId = this.nodeDragState.anchorNodeId;
+      const beforeLayout = cloneLayoutOffsets(this.nodeDragState.beforeLayout);
       this.nodeDragState = null;
       this.dropPreview = null;
       if (this.elements?.surface.hasPointerCapture(event.pointerId)) {
@@ -981,10 +1076,9 @@ export class MindMapView extends ItemView {
       if (didDrag) {
         this.suppressNextNodeClick = true;
         if (dropPreview) {
-          void this.applyDragMove(anchorNodeId, dropPreview);
+          void this.applyDragMove(anchorNodeId, dropPreview, beforeLayout);
         } else if (this.file) {
-          void this.plugin.setLayoutForFile(this.file.path, this.nodeLayoutOffsets);
-          this.render();
+          void this.persistLayoutDrag(anchorNodeId, beforeLayout);
         }
       }
       return;
@@ -1044,18 +1138,14 @@ export class MindMapView extends ItemView {
     }
 
     const { undoBar, undoMessage } = this.elements;
-    const undo = this.lastDeletedNodeUndo;
-    if (!undo) {
+    const undo = this.undoHistory[this.undoHistory.length - 1];
+    if (!undo || this.undoBarDismissed) {
       undoBar.classList.remove("is-visible");
       undoMessage.textContent = "";
       return;
     }
 
-    const suffix =
-      undo.deletedDescendantCount > 0
-        ? ` and ${undo.deletedDescendantCount} nested topic${undo.deletedDescendantCount === 1 ? "" : "s"}`
-        : "";
-    undoMessage.textContent = `Deleted “${undo.deletedLabel}”${suffix}.`;
+    undoMessage.textContent = `${undo.label}.`;
     undoBar.classList.add("is-visible");
   }
 
@@ -1093,6 +1183,8 @@ export class MindMapView extends ItemView {
       return;
     }
 
+    this.isApplyingLocalChange = true;
+
     try {
       const content = await this.app.vault.read(this.file);
       const patch = patchFn(content, node);
@@ -1106,8 +1198,22 @@ export class MindMapView extends ItemView {
           }
         : null;
       if (patch.content !== content) {
-        this.lastDeletedNodeUndo = null;
         await this.app.vault.modify(this.file, patch.content);
+        const beforeLayout = cloneLayoutOffsets(this.nodeLayoutOffsets);
+        this.nodeLayoutOffsets = {};
+        await this.plugin.setLayoutForFile(this.file.path, {});
+        this.pushUndoEntry({
+          filePath: this.file.path,
+          label:
+            patchFn === insertChildNode
+              ? `Added child to “${node.label || node.text}”`
+              : `Added sibling near “${node.label || node.text}”`,
+          beforeContent: content,
+          afterContent: patch.content,
+          beforeLayout,
+          afterLayout: {},
+          restoreSelectionNodeId: node.id,
+        });
       }
       await this.refresh();
     } catch (error) {
@@ -1120,36 +1226,8 @@ export class MindMapView extends ItemView {
       }
 
       new Notice("Failed to update the note structure.");
-    }
-  }
-
-  private async undoLastDeletion(): Promise<void> {
-    if (!this.file || !this.lastDeletedNodeUndo) {
-      return;
-    }
-
-    const undo = this.lastDeletedNodeUndo;
-
-    try {
-      const currentContent = await this.app.vault.read(this.file);
-      if (currentContent !== undo.afterContent) {
-        this.lastDeletedNodeUndo = null;
-        this.renderUndoBar();
-        new Notice("Undo is no longer available because the note changed.");
-        return;
-      }
-
-      this.pendingSelection = {
-        source: {
-          type: "node-id",
-          nodeId: undo.deletedNodeId,
-        },
-      };
-      this.lastDeletedNodeUndo = null;
-      await this.app.vault.modify(this.file, undo.beforeContent);
-      await this.refresh();
-    } catch {
-      new Notice("Failed to restore the deleted topic.");
+    } finally {
+      this.isApplyingLocalChange = false;
     }
   }
 
@@ -1237,6 +1315,7 @@ export class MindMapView extends ItemView {
   private async applyDragMove(
     anchorNodeId: string,
     dropPreview: DropPreviewState,
+    beforeLayout: Record<string, NodeLayoutOffset>,
   ): Promise<void> {
     if (!this.file || !this.parsed) {
       return;
@@ -1248,6 +1327,8 @@ export class MindMapView extends ItemView {
       await this.refresh();
       return;
     }
+
+    this.isApplyingLocalChange = true;
 
     try {
       const content = await this.app.vault.read(this.file);
@@ -1268,8 +1349,20 @@ export class MindMapView extends ItemView {
           }
         : null;
       await this.app.vault.modify(this.file, patch.content);
+      this.nodeLayoutOffsets = {};
+      await this.plugin.setLayoutForFile(this.file.path, {});
+      this.pushUndoEntry({
+        filePath: this.file.path,
+        label: `Moved “${sourceNode.label || sourceNode.text}”`,
+        beforeContent: content,
+        afterContent: patch.content,
+        beforeLayout,
+        afterLayout: {},
+        restoreSelectionNodeId: sourceNode.id,
+      });
       await this.refresh();
     } catch (error) {
+      this.nodeLayoutOffsets = cloneLayoutOffsets(beforeLayout);
       if (error instanceof StructurePatchError) {
         new Notice(error.message);
         if (error.code === "STALE_SOURCE") {
@@ -1282,7 +1375,61 @@ export class MindMapView extends ItemView {
 
       new Notice("Failed to move the topic.");
       await this.refresh();
+    } finally {
+      this.isApplyingLocalChange = false;
     }
+  }
+
+  private async persistLayoutDrag(
+    anchorNodeId: string,
+    beforeLayout: Record<string, NodeLayoutOffset>,
+  ): Promise<void> {
+    if (!this.file) {
+      return;
+    }
+
+    const afterLayout = cloneLayoutOffsets(this.nodeLayoutOffsets);
+    if (layoutOffsetsEqual(beforeLayout, afterLayout)) {
+      this.render();
+      return;
+    }
+
+    this.isApplyingLocalChange = true;
+
+    try {
+      const content = await this.app.vault.read(this.file);
+      await this.plugin.setLayoutForFile(this.file.path, afterLayout);
+      this.pushUndoEntry({
+        filePath: this.file.path,
+        label: "Moved topic layout",
+        beforeContent: content,
+        afterContent: content,
+        beforeLayout,
+        afterLayout,
+        restoreSelectionNodeId: anchorNodeId,
+      });
+      this.render();
+      this.renderUndoBar();
+    } catch {
+      this.nodeLayoutOffsets = cloneLayoutOffsets(beforeLayout);
+      this.render();
+      new Notice("Failed to save the topic layout.");
+    } finally {
+      this.isApplyingLocalChange = false;
+    }
+  }
+
+  private pushUndoEntry(entry: UndoHistoryEntry): void {
+    this.undoHistory.push({
+      ...entry,
+      beforeLayout: cloneLayoutOffsets(entry.beforeLayout),
+      afterLayout: cloneLayoutOffsets(entry.afterLayout),
+    });
+    if (this.undoHistory.length > 50) {
+      this.undoHistory.shift();
+    }
+    this.undoBarDismissed = false;
+    this.renderUndoBar();
   }
 }
 
@@ -1355,6 +1502,36 @@ function buildPreviewCurve(
   const curve = Math.max(26, delta * 0.34);
   const direction = endX >= startX ? 1 : -1;
   return `M ${startX} ${startY} C ${startX + curve * direction} ${startY}, ${endX - curve * direction} ${endY}, ${endX} ${endY}`;
+}
+
+function cloneLayoutOffsets(
+  layout: Record<string, NodeLayoutOffset>,
+): Record<string, NodeLayoutOffset> {
+  const clone: Record<string, NodeLayoutOffset> = {};
+  for (const [nodeId, offset] of Object.entries(layout)) {
+    clone[nodeId] = { x: offset.x, y: offset.y };
+  }
+  return clone;
+}
+
+function layoutOffsetsEqual(
+  left: Record<string, NodeLayoutOffset>,
+  right: Record<string, NodeLayoutOffset>,
+): boolean {
+  const leftEntries = Object.entries(left);
+  const rightEntries = Object.entries(right);
+  if (leftEntries.length !== rightEntries.length) {
+    return false;
+  }
+
+  for (const [nodeId, leftOffset] of leftEntries) {
+    const rightOffset = right[nodeId];
+    if (!rightOffset || leftOffset.x !== rightOffset.x || leftOffset.y !== rightOffset.y) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function findParentNode(root: MindMapNode, targetId: string): MindMapNode | null {

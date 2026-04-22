@@ -123,6 +123,28 @@ export default class ObsidianXMindPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "mind-map-undo-last-action",
+      name: "Mind map: Undo last action",
+      hotkeys: [
+        {
+          modifiers: ["Mod"],
+          key: "z",
+        },
+      ],
+      checkCallback: (checking) => {
+        const view = this.getActiveMindMapView();
+        if (!view || !view.canUndoLastAction()) {
+          return false;
+        }
+
+        if (!checking) {
+          void view.undoLastAction();
+        }
+        return true;
+      },
+    });
+
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
         if (file instanceof TFile) {
