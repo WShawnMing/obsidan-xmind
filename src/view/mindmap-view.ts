@@ -920,9 +920,13 @@ export class MindMapView extends ItemView {
         return;
       }
 
-      const shouldStartEditing = this.pendingEditOnClickNodeId === node.id && editable;
-      this.pendingEditOnClickNodeId = null;
-      if (shouldStartEditing) {
+      if (this.pendingEditOnClickNodeId === node.id) {
+        this.pendingEditOnClickNodeId = null;
+        this.render();
+        return;
+      }
+
+      if (editable && event.detail >= 2) {
         this.startEditing(node.id);
         return;
       }
@@ -1117,11 +1121,10 @@ export class MindMapView extends ItemView {
     }
 
     const wasSelected = this.selectedNodeId === nodeId;
-    this.pendingEditOnClickNodeId = wasSelected ? nodeId : null;
+    this.pendingEditOnClickNodeId = wasSelected ? null : nodeId;
     if (!wasSelected) {
       this.selectedNodeId = nodeId;
       this.contentEl.focus();
-      this.render();
     }
 
     const positioned = this.lastRenderedLayout.nodes.get(nodeId);
@@ -1401,6 +1404,8 @@ export class MindMapView extends ItemView {
         } else if (this.file) {
           void this.persistLayoutDrag(anchorNodeId, beforeLayout);
         }
+      } else if (this.pendingEditOnClickNodeId === anchorNodeId) {
+        this.render();
       }
       return;
     }
