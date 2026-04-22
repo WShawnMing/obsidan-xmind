@@ -1,5 +1,6 @@
 import {
   ItemView,
+  Menu,
   Modal,
   Notice,
   TFile,
@@ -823,7 +824,11 @@ export class MindMapView extends ItemView {
     nodeEl.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      void this.jumpToNodeSource(node);
+      this.selectedNodeId = node.id;
+      this.pendingEditOnClickNodeId = null;
+      this.contentEl.focus();
+      this.render();
+      this.openNodeContextMenu(event, node);
     });
 
     const elements: HTMLElement[] = [nodeEl];
@@ -1417,6 +1422,27 @@ export class MindMapView extends ItemView {
       Math.max(0, span.line - 1),
       Math.max(0, span.column),
     );
+  }
+
+  private openNodeContextMenu(event: MouseEvent, node: MindMapNode): void {
+    const menu = new Menu();
+    const hasSource = node.source.kind === "virtual-root" || !!node.source.span;
+
+    menu.addItem((item) => {
+      item
+        .setTitle(
+          node.source.kind === "virtual-root"
+            ? "Jump to note start"
+            : "Jump to Markdown source",
+        )
+        .setIcon("arrow-up-right")
+        .setDisabled(!hasSource)
+        .onClick(() => {
+          void this.jumpToNodeSource(node);
+        });
+    });
+
+    menu.showAtMouseEvent(event);
   }
 
   private computeDropPreview(event: PointerEvent): DropPreviewState | null {
