@@ -26,6 +26,7 @@ import {
 } from "../constants";
 import { layoutMindMap } from "../layout/tree-layout";
 import { parseMarkdownToMindMap } from "../parser/markdown-parser";
+import { applyPendingTypingSeed } from "./direct-typing";
 import type {
   MindMapAssociation,
   MindMapDocument,
@@ -58,6 +59,7 @@ import { TitlePatchError } from "../write/title-patch-writer";
 import type ObsidianXMindPlugin from "../main";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+const DIRECT_TYPING_SEED_DELAY_MS = 72;
 
 interface ViewElements {
   toolbarTitle: HTMLElement;
@@ -1105,6 +1107,7 @@ export class MindMapView extends ItemView {
         }
       });
       input.addEventListener("compositionstart", () => {
+        this.clearPendingTypingStart();
         this.isEditorComposing = true;
         this.commitAfterComposition = false;
       });
@@ -1121,6 +1124,9 @@ export class MindMapView extends ItemView {
           return;
         }
         void this.commitEditing();
+      });
+      input.addEventListener("input", () => {
+        this.handleEditorInput();
       });
       contentEl.append(input);
       this.editorInput = input;
@@ -1343,6 +1349,7 @@ export class MindMapView extends ItemView {
         }
       });
       input.addEventListener("compositionstart", () => {
+        this.clearPendingTypingStart();
         this.isEditorComposing = true;
         this.commitAfterComposition = false;
       });
@@ -1359,6 +1366,9 @@ export class MindMapView extends ItemView {
           return;
         }
         void this.commitEditing();
+      });
+      input.addEventListener("input", () => {
+        this.handleEditorInput();
       });
       element.append(input);
       this.editorInput = input;
@@ -1431,6 +1441,7 @@ export class MindMapView extends ItemView {
     this.editingAssociationId = null;
     this.editingSeedText = seedText;
     this.render();
+    this.focusEditorInput();
   }
 
   private startEditingAssociation(
@@ -1450,6 +1461,18 @@ export class MindMapView extends ItemView {
     this.editingAssociationId = associationId;
     this.editingSeedText = seedText ?? association.label ?? "";
     this.render();
+    this.focusEditorInput();
+  }
+
+  private focusEditorInput(): void {
+    const input = this.editorInput;
+    if (!input) {
+      return;
+    }
+
+    input.focus();
+    const end = input.value.length;
+    input.setSelectionRange(end, end);
   }
 
   private renderFoldBadge(positioned: PositionedMindMapNode): HTMLButtonElement {
@@ -1842,10 +1865,8 @@ export class MindMapView extends ItemView {
 
     if (this.selectedAssociationId) {
       if (shouldStartTypingEdit(event)) {
-        if (event.key === " ") {
-          event.preventDefault();
-        }
-        this.scheduleTypingStart("association", this.selectedAssociationId, event.key);
+        event.preventDefault();
+        this.startDirectTypingEdit("association", this.selectedAssociationId, event.key);
         return;
       }
 
@@ -1885,11 +1906,9 @@ export class MindMapView extends ItemView {
     }
 
     if (shouldStartTypingEdit(event)) {
-      if (event.key === " ") {
-        event.preventDefault();
-      }
+      event.preventDefault();
       this.pendingAssociationSourceNodeId = null;
-      this.scheduleTypingStart("node", this.selectedNodeId, event.key);
+      this.startDirectTypingEdit("node", this.selectedNodeId, event.key);
       return;
     }
 
@@ -2978,12 +2997,18 @@ export class MindMapView extends ItemView {
     return null;
   }
 
-  private scheduleTypingStart(
+  private startDirectTypingEdit(
     kind: PendingTypingStart["kind"],
     id: string,
     seedText: string,
   ): void {
     this.clearPendingTypingStart();
+
+    if (kind === "association") {
+      this.startEditingAssociation(id, "");
+    } else {
+      this.startEditing(id, "");
+    }
 
     const timeoutId = window.setTimeout(() => {
       const pending = this.pendingTypingStart;
@@ -2992,19 +3017,22 @@ export class MindMapView extends ItemView {
         return;
       }
 
-      if (kind === "association") {
-        if (this.selectedAssociationId !== id || this.editingNodeId || this.editingAssociationId) {
-          return;
-        }
-        this.startEditingAssociation(id, seedText);
+      const targetStillEditing =
+        kind === "association"
+          ? this.editingAssociationId === id
+          : this.editingNodeId === id;
+      if (!targetStillEditing || !this.editorInput || this.isEditorComposing) {
         return;
       }
 
-      if (this.selectedNodeId !== id || this.editingNodeId || this.editingAssociationId) {
+      if (this.editorInput.value.length > 0) {
         return;
       }
-      this.startEditing(id, seedText);
-    }, 24);
+
+      this.editorInput.value = seedText;
+      const end = this.editorInput.value.length;
+      this.editorInput.setSelectionRange(end, end);
+    }, DIRECT_TYPING_SEED_DELAY_MS);
 
     this.pendingTypingStart = {
       kind,
@@ -3012,6 +3040,31 @@ export class MindMapView extends ItemView {
       seedText,
       timeoutId,
     };
+  }
+
+  private handleEditorInput(): void {
+    if (!this.pendingTypingStart || !this.editorInput || this.isEditorComposing) {
+      return;
+    }
+
+    const pending = this.pendingTypingStart;
+    const targetStillEditing =
+      pending.kind === "association"
+        ? this.editingAssociationId === pending.id
+        : this.editingNodeId === pending.id;
+    if (!targetStillEditing) {
+      this.clearPendingTypingStart();
+      return;
+    }
+
+    if (this.editorInput.value.length === 0) {
+      return;
+    }
+
+    this.editorInput.value = applyPendingTypingSeed(pending.seedText, this.editorInput.value);
+    const end = this.editorInput.value.length;
+    this.editorInput.setSelectionRange(end, end);
+    this.clearPendingTypingStart();
   }
 
   private clearPendingTypingStart(): void {
