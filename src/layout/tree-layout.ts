@@ -5,6 +5,7 @@ import type {
   MindMapLayout,
   MindMapNode,
   NodeLayoutOffset,
+  NodeSizeOverride,
   PositionedMindMapNode,
 } from "../types";
 
@@ -17,33 +18,46 @@ const HORIZONTAL_GAP = 220;
 const VERTICAL_GAP = 28;
 const PADDING = 48;
 const OUTSIDE_BADGE_SPACE = 64;
+const MIN_TEXT_NODE_WIDTH = 120;
+const MIN_TEXT_NODE_HEIGHT = NODE_HEIGHT;
+const MIN_IMAGE_NODE_WIDTH = 160;
+const MIN_IMAGE_NODE_HEIGHT = 120;
+const MAX_MANUAL_NODE_WIDTH = 920;
+const MAX_MANUAL_NODE_HEIGHT = 680;
 
 export function layoutMindMap(
   root: MindMapNode,
   layoutOffsets: Record<string, NodeLayoutOffset> = {},
   connectionStyle: MindMapConnectionStyle = "curved",
+  sizeOverrides: Record<string, NodeSizeOverride> = {},
 ): MindMapLayout {
   const nodes = new Map<string, PositionedMindMapNode>();
   const edgePairs: Array<{ parentId: string; childId: string }> = [];
-  let leafCursor = 0;
+  const subtreeHeights = new Map<string, number>();
 
-  const visit = (node: MindMapNode, depth: number): number => {
+  const measure = (node: MindMapNode): number => {
     const visibleChildren = node.collapsed ? [] : node.children;
-    const childCenters: number[] = [];
-
-    for (const child of visibleChildren) {
-      childCenters.push(visit(child, depth + 1));
-      edgePairs.push({
-        parentId: node.id,
-        childId: child.id,
-      });
+    const size = estimateNodeSize(node, sizeOverrides[node.id]);
+    if (visibleChildren.length === 0) {
+      subtreeHeights.set(node.id, size.height);
+      return size.height;
     }
 
-    const size = estimateNodeSize(node);
-    const centerY =
-      childCenters.length === 0
-        ? leafCursor + size.height / 2
-        : (childCenters[0]! + childCenters[childCenters.length - 1]!) / 2;
+    let childrenHeight = 0;
+    for (const child of visibleChildren) {
+      childrenHeight += measure(child);
+    }
+    childrenHeight += VERTICAL_GAP * Math.max(0, visibleChildren.length - 1);
+    const subtreeHeight = Math.max(size.height, childrenHeight);
+    subtreeHeights.set(node.id, subtreeHeight);
+    return subtreeHeight;
+  };
+
+  const visit = (node: MindMapNode, depth: number, top: number): void => {
+    const visibleChildren = node.collapsed ? [] : node.children;
+    const size = estimateNodeSize(node, sizeOverrides[node.id]);
+    const subtreeHeight = subtreeHeights.get(node.id) ?? size.height;
+    const centerY = top + subtreeHeight / 2;
 
     const offset = layoutOffsets[node.id] ?? { x: 0, y: 0 };
 
@@ -56,14 +70,31 @@ export function layoutMindMap(
       depth,
     });
 
-    if (childCenters.length === 0) {
-      leafCursor += size.height + VERTICAL_GAP;
+    if (visibleChildren.length === 0) {
+      return;
     }
 
-    return centerY;
+    const childSubtreeHeight =
+      visibleChildren.reduce(
+        (sum, child) => sum + (subtreeHeights.get(child.id) ?? 0),
+        0,
+      ) +
+      VERTICAL_GAP * Math.max(0, visibleChildren.length - 1);
+    let childTop = top + (subtreeHeight - childSubtreeHeight) / 2;
+
+    for (const child of visibleChildren) {
+      const childHeight = subtreeHeights.get(child.id) ?? 0;
+      visit(child, depth + 1, childTop);
+      edgePairs.push({
+        parentId: node.id,
+        childId: child.id,
+      });
+      childTop += childHeight + VERTICAL_GAP;
+    }
   };
 
-  visit(root, 0);
+  measure(root);
+  visit(root, 0, 0);
 
   const edges: MindMapEdge[] = edgePairs.map(({ parentId, childId }) => {
     const parent = nodes.get(parentId);
@@ -135,11 +166,28 @@ function buildEdgePath(
   return `M ${startX} ${startY} L ${branchAnchorX} ${startY} C ${branchAnchorX + curve} ${startY}, ${endX - curve} ${endY}, ${endX} ${endY}`;
 }
 
-function estimateNodeSize(node: MindMapNode): { width: number; height: number } {
+function estimateNodeSize(
+  node: MindMapNode,
+  override?: NodeSizeOverride,
+): { width: number; height: number } {
   if (node.source.kind === "image-embed") {
+    if (override) {
+      return {
+        width: clampDimension(override.width, MIN_IMAGE_NODE_WIDTH, MAX_MANUAL_NODE_WIDTH),
+        height: clampDimension(override.height, MIN_IMAGE_NODE_HEIGHT, MAX_MANUAL_NODE_HEIGHT),
+      };
+    }
+
     return {
       width: IMAGE_NODE_WIDTH,
       height: IMAGE_NODE_HEIGHT,
+    };
+  }
+
+  if (override) {
+    return {
+      width: clampDimension(override.width, MIN_TEXT_NODE_WIDTH, MAX_MANUAL_NODE_WIDTH),
+      height: clampDimension(override.height, MIN_TEXT_NODE_HEIGHT, MAX_MANUAL_NODE_HEIGHT),
     };
   }
 
@@ -148,4 +196,12 @@ function estimateNodeSize(node: MindMapNode): { width: number; height: number } 
     width: Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, length * 8 + 56)),
     height: NODE_HEIGHT,
   };
+}
+
+function clampDimension(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+
+  return Math.max(min, Math.min(max, Math.round(value)));
 }

@@ -34,6 +34,7 @@ import type {
   MindMapNode,
   MindMapViewState,
   NodeLayoutOffset,
+  NodeSizeOverride,
   PositionedMindMapNode,
   SourceDocumentRef,
 } from "../types";
@@ -91,6 +92,8 @@ interface UndoHistoryEntry {
   afterContent: string;
   beforeLayout: Record<string, NodeLayoutOffset>;
   afterLayout: Record<string, NodeLayoutOffset>;
+  beforeNodeSizes?: Record<string, NodeSizeOverride>;
+  afterNodeSizes?: Record<string, NodeSizeOverride>;
   beforeAssociations: MindMapAssociation[];
   afterAssociations: MindMapAssociation[];
   restoreSelectionNodeId: string | null;
@@ -124,6 +127,17 @@ interface AssociationLabelDragState {
   didDrag: boolean;
 }
 
+interface NodeResizeState {
+  pointerId: number;
+  nodeId: string;
+  startClientX: number;
+  startClientY: number;
+  startWidth: number;
+  startHeight: number;
+  beforeNodeSizes: Record<string, NodeSizeOverride>;
+  didResize: boolean;
+}
+
 interface RenderedAssociation {
   association: MindMapAssociation;
   fromNode: MindMapNode;
@@ -154,9 +168,11 @@ export class MindMapView extends ItemView {
   private undoHistory: UndoHistoryEntry[] = [];
   private undoBarDismissed = false;
   private nodeLayoutOffsets: Record<string, NodeLayoutOffset> = {};
+  private nodeSizeOverrides: Record<string, NodeSizeOverride> = {};
   private associations: MindMapAssociation[] = [];
   private lastRenderedLayout: MindMapLayout | null = null;
   private nodeDragState: NodeDragState | null = null;
+  private nodeResizeState: NodeResizeState | null = null;
   private associationLabelDragState: AssociationLabelDragState | null = null;
   private dropPreview: DropPreviewState | null = null;
   private pendingAssociationSourceNodeId: string | null = null;
@@ -273,9 +289,11 @@ export class MindMapView extends ItemView {
       this.undoBarDismissed = false;
       this.clearUndoBarTimeout();
       this.nodeLayoutOffsets = {};
+      this.nodeSizeOverrides = {};
       this.associations = [];
       this.lastRenderedLayout = null;
       this.nodeDragState = null;
+      this.nodeResizeState = null;
       this.dropPreview = null;
       this.pendingAssociationSourceNodeId = null;
       this.clearPendingTypingStart();
@@ -310,17 +328,28 @@ export class MindMapView extends ItemView {
     }
 
     this.nodeLayoutOffsets = this.plugin.getLayoutForFile(this.file.path);
+    this.nodeSizeOverrides = this.plugin.getNodeSizesForFile(this.file.path);
     const storedAssociations = this.plugin.getAssociationsForFile(this.file.path);
     const validNodeIds = new Set(parsed.nodesById.keys());
     let pruned = false;
+    let prunedSizes = false;
     for (const nodeId of Object.keys(this.nodeLayoutOffsets)) {
       if (!validNodeIds.has(nodeId)) {
         delete this.nodeLayoutOffsets[nodeId];
         pruned = true;
       }
     }
+    for (const nodeId of Object.keys(this.nodeSizeOverrides)) {
+      if (!validNodeIds.has(nodeId)) {
+        delete this.nodeSizeOverrides[nodeId];
+        prunedSizes = true;
+      }
+    }
     if (pruned) {
       void this.plugin.setLayoutForFile(this.file.path, this.nodeLayoutOffsets);
+    }
+    if (prunedSizes) {
+      void this.plugin.setNodeSizesForFile(this.file.path, this.nodeSizeOverrides);
     }
 
     const associationReconcile = reconcileAssociations(parsed, storedAssociations);
@@ -336,6 +365,7 @@ export class MindMapView extends ItemView {
       (latestUndo.filePath !== this.file.path ||
         latestUndo.afterContent !== content ||
         !layoutOffsetsEqual(latestUndo.afterLayout, this.nodeLayoutOffsets) ||
+        !nodeSizesEqual(latestUndo.afterNodeSizes ?? {}, this.nodeSizeOverrides) ||
         !associationsEqual(latestUndo.afterAssociations, this.associations))
     ) {
       this.undoHistory = [];
@@ -582,10 +612,12 @@ export class MindMapView extends ItemView {
     try {
       const currentContent = await this.app.vault.read(this.file);
       const currentLayout = this.plugin.getLayoutForFile(this.file.path);
+      const currentNodeSizes = this.plugin.getNodeSizesForFile(this.file.path);
       const currentAssociations = this.plugin.getAssociationsForFile(this.file.path);
       if (
         currentContent !== entry.afterContent ||
         !layoutOffsetsEqual(currentLayout, entry.afterLayout) ||
+        !nodeSizesEqual(currentNodeSizes, entry.afterNodeSizes ?? {}) ||
         !associationsEqual(currentAssociations, entry.afterAssociations)
       ) {
         this.undoHistory = [];
@@ -609,8 +641,10 @@ export class MindMapView extends ItemView {
       this.undoBarDismissed = true;
       this.clearUndoBarTimeout();
       this.nodeLayoutOffsets = cloneLayoutOffsets(entry.beforeLayout);
+      this.nodeSizeOverrides = cloneNodeSizes(entry.beforeNodeSizes ?? {});
       this.associations = cloneAssociations(entry.beforeAssociations);
       await this.plugin.setLayoutForFile(this.file.path, entry.beforeLayout);
+      await this.plugin.setNodeSizesForFile(this.file.path, entry.beforeNodeSizes ?? {});
       await this.plugin.setAssociationsForFile(this.file.path, entry.beforeAssociations);
       await this.app.vault.modify(this.file, entry.beforeContent);
       await this.refresh();
@@ -911,6 +945,7 @@ export class MindMapView extends ItemView {
       this.parsed.root,
       this.nodeLayoutOffsets,
       this.plugin.getAppearanceSettings().connectionStyle,
+      this.nodeSizeOverrides,
     );
     this.lastRenderedLayout = layout;
     stage.style.width = `${layout.bounds.width}px`;
@@ -1033,6 +1068,10 @@ export class MindMapView extends ItemView {
       nodeEl.classList.add("is-dragging");
     }
 
+    if (this.nodeResizeState?.nodeId === node.id && this.nodeResizeState.didResize) {
+      nodeEl.classList.add("is-resizing");
+    }
+
     if (this.dropPreview?.targetNodeId === node.id) {
       nodeEl.classList.add("is-drop-target");
       nodeEl.classList.add(
@@ -1100,6 +1139,20 @@ export class MindMapView extends ItemView {
     }
 
     nodeEl.append(contentEl);
+    if (!isEditing) {
+      const resizeHandle = document.createElement("button");
+      resizeHandle.className = "oxm-node-resize-handle";
+      resizeHandle.type = "button";
+      resizeHandle.setAttribute("aria-label", "Resize topic");
+      resizeHandle.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      resizeHandle.addEventListener("pointerdown", (event) => {
+        this.onNodeResizePointerDown(event, node.id);
+      });
+      nodeEl.append(resizeHandle);
+    }
     nodeEl.addEventListener("pointerdown", (event) => {
       this.onNodePointerDown(event, node.id);
     });
@@ -1501,7 +1554,9 @@ export class MindMapView extends ItemView {
     if (
       event.button !== 0 ||
       this.editingNodeId ||
-      (event.target as HTMLElement).closest(".oxm-token-link, .oxm-fold-badge")
+      (event.target as HTMLElement).closest(
+        ".oxm-token-link, .oxm-fold-badge, .oxm-node-resize-handle",
+      )
     ) {
       return;
     }
@@ -1552,6 +1607,37 @@ export class MindMapView extends ItemView {
       didDrag: false,
     };
     this.elements?.surface.setPointerCapture(event.pointerId);
+    event.stopPropagation();
+  }
+
+  private onNodeResizePointerDown(event: PointerEvent, nodeId: string): void {
+    if (event.button !== 0 || this.editingNodeId || !this.lastRenderedLayout) {
+      return;
+    }
+
+    const positioned = this.lastRenderedLayout.nodes.get(nodeId);
+    if (!positioned) {
+      return;
+    }
+
+    this.clearPendingTypingStart();
+    this.selectedNodeId = nodeId;
+    this.selectedAssociationId = null;
+    this.pendingEditOnClickNodeId = null;
+    this.pendingAssociationSourceNodeId = null;
+    this.contentEl.focus();
+    this.nodeResizeState = {
+      pointerId: event.pointerId,
+      nodeId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startWidth: positioned.width,
+      startHeight: positioned.height,
+      beforeNodeSizes: cloneNodeSizes(this.nodeSizeOverrides),
+      didResize: false,
+    };
+    this.elements?.surface.setPointerCapture(event.pointerId);
+    event.preventDefault();
     event.stopPropagation();
   }
 
@@ -1859,7 +1945,11 @@ export class MindMapView extends ItemView {
   }
 
   private onPointerDown(event: PointerEvent): void {
-    if ((event.target as HTMLElement).closest(".oxm-node, .oxm-fold-badge")) {
+    if (
+      (event.target as HTMLElement).closest(
+        ".oxm-node, .oxm-fold-badge, .oxm-node-resize-handle",
+      )
+    ) {
       return;
     }
 
@@ -1878,6 +1968,38 @@ export class MindMapView extends ItemView {
   }
 
   private onPointerMove(event: PointerEvent): void {
+    if (this.nodeResizeState && event.pointerId === this.nodeResizeState.pointerId) {
+      const positioned = this.lastRenderedLayout?.nodes.get(this.nodeResizeState.nodeId);
+      if (!positioned) {
+        return;
+      }
+
+      const scale = this.viewport.scale || 1;
+      const deltaX = (event.clientX - this.nodeResizeState.startClientX) / scale;
+      const deltaY = (event.clientY - this.nodeResizeState.startClientY) / scale;
+
+      if (!this.nodeResizeState.didResize && Math.hypot(deltaX, deltaY) < 3) {
+        return;
+      }
+
+      this.nodeResizeState.didResize = true;
+      const bounds = getNodeSizeBounds(positioned.node);
+      this.nodeSizeOverrides[positioned.node.id] = {
+        width: clamp(
+          Math.round(this.nodeResizeState.startWidth + deltaX),
+          bounds.minWidth,
+          bounds.maxWidth,
+        ),
+        height: clamp(
+          Math.round(this.nodeResizeState.startHeight + deltaY),
+          bounds.minHeight,
+          bounds.maxHeight,
+        ),
+      };
+      this.render();
+      return;
+    }
+
     if (this.associationLabelDragState && event.pointerId === this.associationLabelDragState.pointerId) {
       const scale = this.viewport.scale || 1;
       const deltaX = (event.clientX - this.associationLabelDragState.startClientX) / scale;
@@ -1944,6 +2066,23 @@ export class MindMapView extends ItemView {
   }
 
   private onPointerUp(event: PointerEvent): void {
+    if (this.nodeResizeState && event.pointerId === this.nodeResizeState.pointerId) {
+      const resizeState = this.nodeResizeState;
+      this.nodeResizeState = null;
+      if (this.elements?.surface.hasPointerCapture(event.pointerId)) {
+        this.elements.surface.releasePointerCapture(event.pointerId);
+      }
+
+      if (resizeState.didResize) {
+        this.pendingEditOnClickNodeId = null;
+        this.suppressNextNodeClick = true;
+        void this.persistNodeResize(resizeState);
+      } else {
+        this.render();
+      }
+      return;
+    }
+
     if (
       this.associationLabelDragState &&
       event.pointerId === this.associationLabelDragState.pointerId
@@ -2114,15 +2253,21 @@ export class MindMapView extends ItemView {
 
       if (operation.content !== content) {
         const beforeLayout = cloneLayoutOffsets(this.nodeLayoutOffsets);
+        const beforeNodeSizes = cloneNodeSizes(this.nodeSizeOverrides);
         const afterLayout = operation.preserveLayout
           ? cloneLayoutOffsets(this.nodeLayoutOffsets)
+          : {};
+        const afterNodeSizes = operation.preserveLayout
+          ? cloneNodeSizes(this.nodeSizeOverrides)
           : {};
 
         await this.app.vault.modify(this.file, operation.content);
 
         if (!operation.preserveLayout) {
           this.nodeLayoutOffsets = {};
+          this.nodeSizeOverrides = {};
           await this.plugin.setLayoutForFile(this.file.path, {});
+          await this.plugin.setNodeSizesForFile(this.file.path, {});
         }
 
         this.pushUndoEntry({
@@ -2133,12 +2278,15 @@ export class MindMapView extends ItemView {
           afterContent: operation.content,
           beforeLayout,
           afterLayout,
+          beforeNodeSizes,
+          afterNodeSizes,
           beforeAssociations,
           afterAssociations: nextAssociations,
           restoreSelectionNodeId: operation.restoreSelectionNodeId,
         });
       } else if (!associationsEqual(beforeAssociations, nextAssociations)) {
         const currentLayout = cloneLayoutOffsets(this.nodeLayoutOffsets);
+        const currentNodeSizes = cloneNodeSizes(this.nodeSizeOverrides);
         this.pushUndoEntry({
           filePath: this.file.path,
           label: operation.label,
@@ -2147,6 +2295,8 @@ export class MindMapView extends ItemView {
           afterContent: content,
           beforeLayout: currentLayout,
           afterLayout: currentLayout,
+          beforeNodeSizes: currentNodeSizes,
+          afterNodeSizes: currentNodeSizes,
           beforeAssociations,
           afterAssociations: nextAssociations,
           restoreSelectionNodeId: operation.restoreSelectionNodeId,
@@ -2618,6 +2768,8 @@ export class MindMapView extends ItemView {
         afterContent: content,
         beforeLayout,
         afterLayout,
+        beforeNodeSizes: cloneNodeSizes(this.nodeSizeOverrides),
+        afterNodeSizes: cloneNodeSizes(this.nodeSizeOverrides),
         beforeAssociations: cloneAssociations(this.associations),
         afterAssociations: cloneAssociations(this.associations),
         restoreSelectionNodeId: anchorNodeId,
@@ -2628,6 +2780,45 @@ export class MindMapView extends ItemView {
       this.nodeLayoutOffsets = cloneLayoutOffsets(beforeLayout);
       this.render();
       new Notice("Failed to save the topic layout.");
+    } finally {
+      this.isApplyingLocalChange = false;
+    }
+  }
+
+  private async persistNodeResize(resizeState: NodeResizeState): Promise<void> {
+    if (!this.file) {
+      return;
+    }
+
+    const afterNodeSizes = cloneNodeSizes(this.nodeSizeOverrides);
+    if (nodeSizesEqual(resizeState.beforeNodeSizes, afterNodeSizes)) {
+      this.render();
+      return;
+    }
+
+    this.isApplyingLocalChange = true;
+    try {
+      const content = await this.app.vault.read(this.file);
+      await this.plugin.setNodeSizesForFile(this.file.path, afterNodeSizes);
+      this.pushUndoEntry({
+        filePath: this.file.path,
+        label: "Resized topic",
+        showBanner: false,
+        beforeContent: content,
+        afterContent: content,
+        beforeLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+        afterLayout: cloneLayoutOffsets(this.nodeLayoutOffsets),
+        beforeNodeSizes: resizeState.beforeNodeSizes,
+        afterNodeSizes,
+        beforeAssociations: cloneAssociations(this.associations),
+        afterAssociations: cloneAssociations(this.associations),
+        restoreSelectionNodeId: resizeState.nodeId,
+      });
+      this.render();
+    } catch {
+      this.nodeSizeOverrides = cloneNodeSizes(resizeState.beforeNodeSizes);
+      this.render();
+      new Notice("Failed to save the topic size.");
     } finally {
       this.isApplyingLocalChange = false;
     }
@@ -2674,10 +2865,14 @@ export class MindMapView extends ItemView {
   }
 
   private pushUndoEntry(entry: UndoHistoryEntry): void {
+    const beforeNodeSizes = cloneNodeSizes(entry.beforeNodeSizes ?? this.nodeSizeOverrides);
+    const afterNodeSizes = cloneNodeSizes(entry.afterNodeSizes ?? this.nodeSizeOverrides);
     this.undoHistory.push({
       ...entry,
       beforeLayout: cloneLayoutOffsets(entry.beforeLayout),
       afterLayout: cloneLayoutOffsets(entry.afterLayout),
+      beforeNodeSizes,
+      afterNodeSizes,
       beforeAssociations: cloneAssociations(entry.beforeAssociations),
       afterAssociations: cloneAssociations(entry.afterAssociations),
     });
@@ -3003,12 +3198,45 @@ function normalizeAssociationLabel(value: string): string {
     .trim();
 }
 
+function getNodeSizeBounds(
+  node: MindMapNode,
+): { minWidth: number; minHeight: number; maxWidth: number; maxHeight: number } {
+  if (node.source.kind === "image-embed") {
+    return {
+      minWidth: 160,
+      minHeight: 120,
+      maxWidth: 920,
+      maxHeight: 680,
+    };
+  }
+
+  return {
+    minWidth: 120,
+    minHeight: 44,
+    maxWidth: 920,
+    maxHeight: 680,
+  };
+}
+
 function cloneLayoutOffsets(
   layout: Record<string, NodeLayoutOffset>,
 ): Record<string, NodeLayoutOffset> {
   const clone: Record<string, NodeLayoutOffset> = {};
   for (const [nodeId, offset] of Object.entries(layout)) {
     clone[nodeId] = { x: offset.x, y: offset.y };
+  }
+  return clone;
+}
+
+function cloneNodeSizes(
+  sizes: Record<string, NodeSizeOverride>,
+): Record<string, NodeSizeOverride> {
+  const clone: Record<string, NodeSizeOverride> = {};
+  for (const [nodeId, size] of Object.entries(sizes)) {
+    clone[nodeId] = {
+      width: size.width,
+      height: size.height,
+    };
   }
   return clone;
 }
@@ -3026,6 +3254,30 @@ function layoutOffsetsEqual(
   for (const [nodeId, leftOffset] of leftEntries) {
     const rightOffset = right[nodeId];
     if (!rightOffset || leftOffset.x !== rightOffset.x || leftOffset.y !== rightOffset.y) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function nodeSizesEqual(
+  left: Record<string, NodeSizeOverride>,
+  right: Record<string, NodeSizeOverride>,
+): boolean {
+  const leftEntries = Object.entries(left);
+  const rightEntries = Object.entries(right);
+  if (leftEntries.length !== rightEntries.length) {
+    return false;
+  }
+
+  for (const [nodeId, leftSize] of leftEntries) {
+    const rightSize = right[nodeId];
+    if (
+      !rightSize ||
+      leftSize.width !== rightSize.width ||
+      leftSize.height !== rightSize.height
+    ) {
       return false;
     }
   }

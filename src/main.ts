@@ -9,6 +9,7 @@ import type {
   MindMapAssociation,
   MindMapViewState,
   NodeLayoutOffset,
+  NodeSizeOverride,
   PluginData,
 } from "./types";
 import { MindMapView } from "./view/mindmap-view";
@@ -16,6 +17,7 @@ import type { CopiedMindMapSubtree } from "./write/structure-patch-writer";
 
 export default class ObsidianXMindPlugin extends Plugin {
   private layoutByFile: Record<string, Record<string, NodeLayoutOffset>> = {};
+  private sizeByFile: Record<string, Record<string, NodeSizeOverride>> = {};
   private associationsByFile: Record<string, MindMapAssociation[]> = {};
   private appearanceSettings: AppearanceSettings = { ...DEFAULT_APPEARANCE_SETTINGS };
   private mindMapClipboard: CopiedMindMapSubtree | null = null;
@@ -23,6 +25,7 @@ export default class ObsidianXMindPlugin extends Plugin {
   async onload(): Promise<void> {
     const data = (await this.loadData()) as PluginData | null;
     this.layoutByFile = normalizeLayoutStore(data?.layoutByFile);
+    this.sizeByFile = normalizeSizeStore(data?.sizeByFile);
     this.associationsByFile = normalizeAssociationStore(data?.associationsByFile);
     this.appearanceSettings = normalizeAppearanceSettings(data?.appearance);
 
@@ -268,6 +271,7 @@ export default class ObsidianXMindPlugin extends Plugin {
       this.app.vault.on("rename", (file, oldPath) => {
         if (file instanceof TFile) {
           void this.migrateLayoutBucket(oldPath, file.path);
+          void this.migrateNodeSizeBucket(oldPath, file.path);
           void this.migrateAssociationBucket(oldPath, file.path);
           void this.notifyViewsOfRenamedFile(file, oldPath);
         }
@@ -309,6 +313,10 @@ export default class ObsidianXMindPlugin extends Plugin {
     return cloneAssociations(this.associationsByFile[filePath] ?? []);
   }
 
+  getNodeSizesForFile(filePath: string): Record<string, NodeSizeOverride> {
+    return { ...(this.sizeByFile[filePath] ?? {}) };
+  }
+
   getAppearanceSettings(): AppearanceSettings {
     return { ...this.appearanceSettings };
   }
@@ -343,6 +351,19 @@ export default class ObsidianXMindPlugin extends Plugin {
       delete this.layoutByFile[filePath];
     } else {
       this.layoutByFile[filePath] = { ...layout };
+    }
+
+    await this.persistPluginData();
+  }
+
+  async setNodeSizesForFile(
+    filePath: string,
+    sizes: Record<string, NodeSizeOverride>,
+  ): Promise<void> {
+    if (Object.keys(sizes).length === 0) {
+      delete this.sizeByFile[filePath];
+    } else {
+      this.sizeByFile[filePath] = { ...sizes };
     }
 
     await this.persistPluginData();
@@ -438,6 +459,40 @@ export default class ObsidianXMindPlugin extends Plugin {
     await this.persistPluginData();
   }
 
+  async pruneNodeSizesForFile(
+    filePath: string,
+    validNodeIds: Iterable<string>,
+  ): Promise<void> {
+    const current = this.sizeByFile[filePath];
+    if (!current) {
+      return;
+    }
+
+    const valid = new Set(validNodeIds);
+    const next: Record<string, NodeSizeOverride> = {};
+    let changed = false;
+
+    for (const [nodeId, size] of Object.entries(current)) {
+      if (valid.has(nodeId)) {
+        next[nodeId] = size;
+      } else {
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      return;
+    }
+
+    if (Object.keys(next).length === 0) {
+      delete this.sizeByFile[filePath];
+    } else {
+      this.sizeByFile[filePath] = next;
+    }
+
+    await this.persistPluginData();
+  }
+
   private findLeafForFile(filePath: string): WorkspaceLeaf | null {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
       const view = leaf.view;
@@ -500,6 +555,21 @@ export default class ObsidianXMindPlugin extends Plugin {
     await this.persistPluginData();
   }
 
+  private async migrateNodeSizeBucket(oldPath: string, newPath: string): Promise<void> {
+    if (oldPath === newPath) {
+      return;
+    }
+
+    const current = this.sizeByFile[oldPath];
+    if (!current) {
+      return;
+    }
+
+    this.sizeByFile[newPath] = current;
+    delete this.sizeByFile[oldPath];
+    await this.persistPluginData();
+  }
+
   private async migrateAssociationBucket(oldPath: string, newPath: string): Promise<void> {
     if (oldPath === newPath) {
       return;
@@ -518,6 +588,7 @@ export default class ObsidianXMindPlugin extends Plugin {
   private async persistPluginData(): Promise<void> {
     await this.saveData({
       layoutByFile: this.layoutByFile,
+      sizeByFile: this.sizeByFile,
       associationsByFile: this.associationsByFile,
       appearance: this.appearanceSettings,
     } satisfies PluginData);
@@ -580,6 +651,43 @@ function normalizeAppearanceSettings(
     connectionStyle:
       value?.connectionStyle ?? DEFAULT_APPEARANCE_SETTINGS.connectionStyle,
   };
+}
+
+function normalizeSizeStore(
+  value: PluginData["sizeByFile"],
+): Record<string, Record<string, NodeSizeOverride>> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  const next: Record<string, Record<string, NodeSizeOverride>> = {};
+
+  for (const [filePath, nodeMap] of Object.entries(value)) {
+    if (!nodeMap || typeof nodeMap !== "object") {
+      continue;
+    }
+
+    const normalizedNodeMap: Record<string, NodeSizeOverride> = {};
+    for (const [nodeId, size] of Object.entries(nodeMap)) {
+      if (
+        size &&
+        typeof size === "object" &&
+        Number.isFinite(size.width) &&
+        Number.isFinite(size.height)
+      ) {
+        normalizedNodeMap[nodeId] = {
+          width: size.width,
+          height: size.height,
+        };
+      }
+    }
+
+    if (Object.keys(normalizedNodeMap).length > 0) {
+      next[filePath] = normalizedNodeMap;
+    }
+  }
+
+  return next;
 }
 
 function normalizeAssociationStore(

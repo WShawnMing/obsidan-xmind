@@ -106,6 +106,11 @@ export interface NodeLayoutOffset {
   y: number;
 }
 
+export interface NodeSizeOverride {
+  width: number;
+  height: number;
+}
+
 export interface AppearanceSettings {
   backgroundStyle: MindMapBackgroundStyle;
   nodeShape: MindMapNodeShape;
@@ -114,6 +119,7 @@ export interface AppearanceSettings {
 
 export interface PluginData {
   layoutByFile?: Record<string, Record<string, NodeLayoutOffset>>;
+  sizeByFile?: Record<string, Record<string, NodeSizeOverride>>;
   associationsByFile?: Record<string, MindMapAssociation[]>;
   appearance?: Partial<AppearanceSettings>;
 }
