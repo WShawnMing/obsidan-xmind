@@ -27,6 +27,7 @@ import {
 import { layoutMindMap } from "../layout/tree-layout";
 import { parseMarkdownToMindMap } from "../parser/markdown-parser";
 import { applyPendingTypingSeed } from "./direct-typing";
+import { findNavigationTarget, findParentNode } from "./navigation";
 import type {
   MindMapAssociation,
   MindMapDocument,
@@ -531,7 +532,7 @@ export class MindMapView extends ItemView {
   }
 
   navigateSelection(direction: "left" | "right" | "up" | "down"): void {
-    if (!this.parsed || !this.selectedNodeId || !this.lastRenderedLayout) {
+    if (!this.parsed || !this.selectedNodeId) {
       return;
     }
 
@@ -540,55 +541,16 @@ export class MindMapView extends ItemView {
       return;
     }
 
-    if (direction === "left") {
-      if (currentNode.children.length > 0 && !currentNode.collapsed) {
-        currentNode.collapsed = true;
-        this.render();
-        return;
-      }
-
-      const parent = findParentNode(this.parsed.root, currentNode.id);
-      if (parent) {
-        this.selectedNodeId = parent.id;
-        this.contentEl.focus();
-        this.render();
-      }
+    const targetNodeId = findNavigationTarget(
+      this.parsed.root,
+      currentNode.id,
+      direction,
+    );
+    if (targetNodeId === currentNode.id) {
       return;
     }
 
-    if (direction === "right") {
-      if (currentNode.children.length === 0) {
-        return;
-      }
-
-      if (currentNode.collapsed) {
-        currentNode.collapsed = false;
-        this.render();
-        return;
-      }
-
-      const firstChild = currentNode.children[0];
-      if (firstChild) {
-        this.selectedNodeId = firstChild.id;
-        this.contentEl.focus();
-        this.render();
-      }
-      return;
-    }
-
-    const orderedNodes = getVisibleNodesByVisualOrder(this.lastRenderedLayout);
-    const currentIndex = orderedNodes.findIndex(({ node }) => node.id === currentNode.id);
-    if (currentIndex === -1) {
-      return;
-    }
-
-    const target =
-      direction === "up" ? orderedNodes[currentIndex - 1] : orderedNodes[currentIndex + 1];
-    if (!target) {
-      return;
-    }
-
-    this.selectedNodeId = target.node.id;
+    this.selectedNodeId = targetNodeId;
     this.contentEl.focus();
     this.render();
   }
@@ -3200,24 +3162,6 @@ function buildAssociationGeometry(
   };
 }
 
-function getVisibleNodesByVisualOrder(
-  layout: MindMapLayout,
-): PositionedMindMapNode[] {
-  return [...layout.nodes.values()].sort((left, right) => {
-    const leftCenterY = left.y + left.height / 2;
-    const rightCenterY = right.y + right.height / 2;
-    if (leftCenterY !== rightCenterY) {
-      return leftCenterY - rightCenterY;
-    }
-
-    if (left.depth !== right.depth) {
-      return left.depth - right.depth;
-    }
-
-    return left.x - right.x;
-  });
-}
-
 function shouldStartTypingEdit(event: KeyboardEvent): boolean {
   if (event.metaKey || event.ctrlKey || event.altKey) {
     return false;
@@ -3336,21 +3280,6 @@ function nodeSizesEqual(
   }
 
   return true;
-}
-
-function findParentNode(root: MindMapNode, targetId: string): MindMapNode | null {
-  for (const child of root.children) {
-    if (child.id === targetId) {
-      return root;
-    }
-
-    const parent = findParentNode(child, targetId);
-    if (parent) {
-      return parent;
-    }
-  }
-
-  return null;
 }
 
 function findInsertedNode(
