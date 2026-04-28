@@ -39,6 +39,7 @@ describe("markdown-text-operation", () => {
 
     expect(operation.content).toBe(["# Root", "## Alpha", "### New topic"].join("\n"));
     expect(operation.preserveLayout).toBe(false);
+    expect(operation.preserveNodeIds).toEqual([alphaId]);
     expect(operation.nextSelection).toEqual({
       type: "inserted",
       selection: {

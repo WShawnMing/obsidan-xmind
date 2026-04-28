@@ -397,6 +397,7 @@
 }
 
 .oxm-node-content {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -576,6 +577,22 @@
   -webkit-appearance: none;
   box-shadow: none;
   border-radius: 0;
+}
+
+.oxm-node-ime-capture {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.oxm-node-ime-capture.is-active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.oxm-node.is-editing .oxm-node-content > :not(.oxm-node-ime-capture) {
+  visibility: hidden;
 }
 
 .oxm-undo-bar {

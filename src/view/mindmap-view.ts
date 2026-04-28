@@ -26,7 +26,6 @@ import {
 } from "../constants";
 import { layoutMindMap } from "../layout/tree-layout";
 import { parseMarkdownToMindMap } from "../parser/markdown-parser";
-import { applyPendingTypingSeed } from "./direct-typing";
 import { findNavigationTarget, findParentNode } from "./navigation";
 import type {
   MindMapAssociation,
@@ -60,8 +59,6 @@ import { TitlePatchError } from "../write/title-patch-writer";
 import type ObsidianXMindPlugin from "../main";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
-const DIRECT_TYPING_SEED_DELAY_MS = 72;
-
 interface ViewElements {
   toolbarTitle: HTMLElement;
   surface: HTMLElement;
@@ -150,13 +147,6 @@ interface RenderedAssociation {
   labelY: number;
 }
 
-interface PendingTypingStart {
-  kind: "node" | "association";
-  id: string;
-  seedText: string;
-  timeoutId: number;
-}
-
 export class MindMapView extends ItemView {
   private plugin: ObsidianXMindPlugin;
   private file: TFile | null = null;
@@ -188,7 +178,6 @@ export class MindMapView extends ItemView {
   private isApplyingLocalChange = false;
   private isUndoing = false;
   private undoBarTimeout: number | null = null;
-  private pendingTypingStart: PendingTypingStart | null = null;
   private viewport = { ...DEFAULT_VIEWPORT };
   private panState:
     | {
@@ -866,7 +855,6 @@ export class MindMapView extends ItemView {
       (event) => this.onWheel(event),
       { passive: false },
     );
-    this.contentEl.addEventListener("compositionstart", () => this.onCompositionStart());
 
     this.contentEl.append(toolbar, surface, undoBar);
     this.elements = {
@@ -1069,7 +1057,6 @@ export class MindMapView extends ItemView {
         }
       });
       input.addEventListener("compositionstart", () => {
-        this.clearPendingTypingStart();
         this.isEditorComposing = true;
         this.commitAfterComposition = false;
       });
@@ -1087,9 +1074,6 @@ export class MindMapView extends ItemView {
         }
         void this.commitEditing();
       });
-      input.addEventListener("input", () => {
-        this.handleEditorInput();
-      });
       contentEl.append(input);
       this.editorInput = input;
       window.requestAnimationFrame(() => {
@@ -1103,6 +1087,73 @@ export class MindMapView extends ItemView {
     } else {
       for (const token of node.tokens) {
         contentEl.append(this.renderToken(token));
+      }
+      if (editable && node.id === this.selectedNodeId) {
+        const input = document.createElement("input");
+        input.className = "oxm-node-input oxm-node-ime-capture";
+        input.type = "text";
+        input.value = "";
+        input.setAttribute("aria-label", "Edit topic");
+        input.addEventListener("pointerdown", (event) => {
+          event.stopPropagation();
+        });
+        input.addEventListener("keydown", (event) => {
+          if (this.editingNodeId === node.id) {
+            if (event.isComposing || this.isEditorComposing) {
+              return;
+            }
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.stopPropagation();
+              void this.commitEditing();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              this.endEditing(true);
+              this.render();
+            }
+            return;
+          }
+          if (event.isComposing || this.isEditorComposing || shouldStartTypingEdit(event)) {
+            return;
+          }
+          this.onKeyDown(event);
+        });
+        input.addEventListener("compositionstart", () => {
+          this.promoteCaptureInputToEditor(node.id, input, true);
+        });
+        input.addEventListener("compositionend", () => {
+          this.isEditorComposing = false;
+          if (this.commitAfterComposition) {
+            this.commitAfterComposition = false;
+            void this.commitEditing();
+          }
+        });
+        input.addEventListener("input", () => {
+          if (input.value.length > 0) {
+            this.promoteCaptureInputToEditor(node.id, input, false);
+          }
+        });
+        input.addEventListener("blur", () => {
+          if (this.editingNodeId === node.id) {
+            if (this.isEditorComposing) {
+              this.commitAfterComposition = true;
+              return;
+            }
+            void this.commitEditing();
+          }
+        });
+        contentEl.append(input);
+        this.editorInput = input;
+        window.requestAnimationFrame(() => {
+          if (
+            this.selectedNodeId === node.id &&
+            !this.editingNodeId &&
+            this.isActiveMindMapView()
+          ) {
+            input.focus();
+          }
+        });
       }
     }
 
@@ -1311,7 +1362,6 @@ export class MindMapView extends ItemView {
         }
       });
       input.addEventListener("compositionstart", () => {
-        this.clearPendingTypingStart();
         this.isEditorComposing = true;
         this.commitAfterComposition = false;
       });
@@ -1328,9 +1378,6 @@ export class MindMapView extends ItemView {
           return;
         }
         void this.commitEditing();
-      });
-      input.addEventListener("input", () => {
-        this.handleEditorInput();
       });
       element.append(input);
       this.editorInput = input;
@@ -1435,6 +1482,37 @@ export class MindMapView extends ItemView {
     input.focus();
     const end = input.value.length;
     input.setSelectionRange(end, end);
+  }
+
+  private promoteCaptureInputToEditor(
+    nodeId: string,
+    input: HTMLInputElement,
+    isComposing: boolean,
+  ): void {
+    if (!this.parsed) {
+      return;
+    }
+
+    const node = this.parsed.nodesById.get(nodeId);
+    if (
+      !node ||
+      (node.source.kind !== "heading" && node.source.kind !== "overflow-list")
+    ) {
+      return;
+    }
+
+    this.selectedNodeId = nodeId;
+    this.selectedAssociationId = null;
+    this.pendingAssociationSourceNodeId = null;
+    this.editingNodeId = nodeId;
+    this.editingAssociationId = null;
+    this.editingSeedText = null;
+    this.editorInput = input;
+    this.isEditorComposing = isComposing;
+    this.commitAfterComposition = false;
+    input.classList.add("is-active");
+    input.closest(".oxm-node")?.classList.add("is-editing");
+    input.focus();
   }
 
   private renderFoldBadge(positioned: PositionedMindMapNode): HTMLButtonElement {
@@ -1828,7 +1906,7 @@ export class MindMapView extends ItemView {
     if (this.selectedAssociationId) {
       if (shouldStartTypingEdit(event)) {
         event.preventDefault();
-        this.startDirectTypingEdit("association", this.selectedAssociationId, event.key);
+        this.startEditingAssociation(this.selectedAssociationId, event.key);
         return;
       }
 
@@ -1870,7 +1948,7 @@ export class MindMapView extends ItemView {
     if (shouldStartTypingEdit(event)) {
       event.preventDefault();
       this.pendingAssociationSourceNodeId = null;
-      this.startDirectTypingEdit("node", this.selectedNodeId, event.key);
+      this.startEditing(this.selectedNodeId, event.key);
       return;
     }
 
@@ -1904,25 +1982,6 @@ export class MindMapView extends ItemView {
     }
 
     this.onKeyDown(event);
-  }
-
-  private onCompositionStart(): void {
-    if (this.editingNodeId || this.editingAssociationId) {
-      return;
-    }
-
-    this.clearPendingTypingStart();
-
-    if (this.selectedAssociationId) {
-      this.startEditingAssociation(this.selectedAssociationId, "");
-      return;
-    }
-
-    if (!this.selectedNodeId) {
-      return;
-    }
-
-    this.startEditing(this.selectedNodeId, "");
   }
 
   private onPointerDown(event: PointerEvent): void {
@@ -2237,18 +2296,26 @@ export class MindMapView extends ItemView {
         const beforeNodeSizes = cloneNodeSizes(this.nodeSizeOverrides);
         const afterLayout = operation.preserveLayout
           ? cloneLayoutOffsets(this.nodeLayoutOffsets)
-          : {};
+          : pickLayoutOffsets(
+              this.nodeLayoutOffsets,
+              operation.preserveNodeIds ?? [],
+              nextParsed,
+            );
         const afterNodeSizes = operation.preserveLayout
           ? cloneNodeSizes(this.nodeSizeOverrides)
-          : {};
+          : pickNodeSizes(
+              this.nodeSizeOverrides,
+              operation.preserveNodeIds ?? [],
+              nextParsed,
+            );
 
         await this.app.vault.modify(this.file, operation.content);
 
         if (!operation.preserveLayout) {
-          this.nodeLayoutOffsets = {};
-          this.nodeSizeOverrides = {};
-          await this.plugin.setLayoutForFile(this.file.path, {});
-          await this.plugin.setNodeSizesForFile(this.file.path, {});
+          this.nodeLayoutOffsets = cloneLayoutOffsets(afterLayout);
+          this.nodeSizeOverrides = cloneNodeSizes(afterNodeSizes);
+          await this.plugin.setLayoutForFile(this.file.path, afterLayout);
+          await this.plugin.setNodeSizesForFile(this.file.path, afterNodeSizes);
         }
 
         this.pushUndoEntry({
@@ -2959,83 +3026,8 @@ export class MindMapView extends ItemView {
     return null;
   }
 
-  private startDirectTypingEdit(
-    kind: PendingTypingStart["kind"],
-    id: string,
-    seedText: string,
-  ): void {
-    this.clearPendingTypingStart();
-
-    if (kind === "association") {
-      this.startEditingAssociation(id, "");
-    } else {
-      this.startEditing(id, "");
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      const pending = this.pendingTypingStart;
-      this.pendingTypingStart = null;
-      if (!pending || pending.id !== id || pending.kind !== kind) {
-        return;
-      }
-
-      const targetStillEditing =
-        kind === "association"
-          ? this.editingAssociationId === id
-          : this.editingNodeId === id;
-      if (!targetStillEditing || !this.editorInput || this.isEditorComposing) {
-        return;
-      }
-
-      if (this.editorInput.value.length > 0) {
-        return;
-      }
-
-      this.editorInput.value = seedText;
-      const end = this.editorInput.value.length;
-      this.editorInput.setSelectionRange(end, end);
-    }, DIRECT_TYPING_SEED_DELAY_MS);
-
-    this.pendingTypingStart = {
-      kind,
-      id,
-      seedText,
-      timeoutId,
-    };
-  }
-
-  private handleEditorInput(): void {
-    if (!this.pendingTypingStart || !this.editorInput || this.isEditorComposing) {
-      return;
-    }
-
-    const pending = this.pendingTypingStart;
-    const targetStillEditing =
-      pending.kind === "association"
-        ? this.editingAssociationId === pending.id
-        : this.editingNodeId === pending.id;
-    if (!targetStillEditing) {
-      this.clearPendingTypingStart();
-      return;
-    }
-
-    if (this.editorInput.value.length === 0) {
-      return;
-    }
-
-    this.editorInput.value = applyPendingTypingSeed(pending.seedText, this.editorInput.value);
-    const end = this.editorInput.value.length;
-    this.editorInput.setSelectionRange(end, end);
-    this.clearPendingTypingStart();
-  }
-
   private clearPendingTypingStart(): void {
-    if (!this.pendingTypingStart) {
-      return;
-    }
-
-    window.clearTimeout(this.pendingTypingStart.timeoutId);
-    this.pendingTypingStart = null;
+    // Kept as a cleanup hook for existing editing flows.
   }
 }
 
@@ -3236,6 +3228,36 @@ function cloneNodeSizes(
     };
   }
   return clone;
+}
+
+function pickLayoutOffsets(
+  layout: Record<string, NodeLayoutOffset>,
+  nodeIds: string[],
+  document: MindMapDocument,
+): Record<string, NodeLayoutOffset> {
+  const next: Record<string, NodeLayoutOffset> = {};
+  for (const nodeId of nodeIds) {
+    const offset = layout[nodeId];
+    if (offset && document.nodesById.has(nodeId)) {
+      next[nodeId] = { x: offset.x, y: offset.y };
+    }
+  }
+  return next;
+}
+
+function pickNodeSizes(
+  sizes: Record<string, NodeSizeOverride>,
+  nodeIds: string[],
+  document: MindMapDocument,
+): Record<string, NodeSizeOverride> {
+  const next: Record<string, NodeSizeOverride> = {};
+  for (const nodeId of nodeIds) {
+    const size = sizes[nodeId];
+    if (size && document.nodesById.has(nodeId)) {
+      next[nodeId] = { width: size.width, height: size.height };
+    }
+  }
+  return next;
 }
 
 function layoutOffsetsEqual(

@@ -30,6 +30,7 @@ export interface MarkdownTextOperationResult {
   label: string;
   showBanner: boolean;
   preserveLayout: boolean;
+  preserveNodeIds?: string[];
   nextSelection: MarkdownTextOperationSelection | null;
   restoreSelectionNodeId: string | null;
 }
@@ -71,6 +72,7 @@ export function insertSiblingNodeInMarkdown(
     label: `Added sibling near “${node.label || node.text}”`,
     showBanner: false,
     preserveLayout: false,
+    preserveNodeIds: [node.id],
     nextSelection: patch.insertedNode
       ? {
           type: "inserted",
@@ -96,6 +98,7 @@ export function insertChildNodeInMarkdown(
     label: `Added child to “${node.label || node.text}”`,
     showBanner: false,
     preserveLayout: false,
+    preserveNodeIds: [node.id],
     nextSelection: patch.insertedNode
       ? {
           type: "inserted",
